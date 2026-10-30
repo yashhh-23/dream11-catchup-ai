@@ -159,6 +159,11 @@ export async function POST(req: NextRequest) {
           console.warn("Groq inference skipped or failed, using local fallback engine:", err?.message || err);
         }
 
+        // Batters involved in this phase
+        const battersSummary = battersInPhase.length > 0 
+          ? battersInPhase.join(" and ") 
+          : "the middle order";
+
         // Offline deterministic fallback
         if (!recapPayload) {
           const wicketsText = stats.wickets === 1 
@@ -166,9 +171,6 @@ export async function POST(req: NextRequest) {
             : `${stats.wickets} wickets`;
           
           const boundarySummary = `${stats.boundaries} fours and ${stats.sixes} sixes`;
-          const battersSummary = battersInPhase.length > 0 
-            ? battersInPhase.join(" and ") 
-            : "the middle order";
 
           let storySummary: string;
           if (runsNeededAtPhaseEnd <= 0) {
@@ -201,11 +203,29 @@ export async function POST(req: NextRequest) {
           };
         }
 
-        // Hinglish audio support
-        if (language === "hinglish") {
-          recapPayload.hinglishOneLiner = `Bhai tumne bawal match miss kar diya! Rohit aur SKY ke out hone ke baad Hardik aur Tilak ne stadium hila diya!`;
-          recapPayload.hinglishStory = `Overs ${fromDisplay} se ${toDisplay} ke beech India ne ${stats.runs} runs banaye. Ish Sodhi ne 2 jhatke diye the par Tilak Varma aur Hardik Pandya ne sixes ki barsaat karke match India ke pakad mein laa diya!`;
+        // Dynamic Hinglish commentary (always generated so user can toggle languages instantly)
+        const dismissedHinglish = dismissedInPhase.length > 0 
+          ? `${dismissedInPhase.slice(0, 2).join(" aur ")} ke wicket ke baad` 
+          : "chase ke dauran";
+
+        let hinglishHeadline: string;
+        if (stats.wickets >= 2) {
+          hinglishHeadline = `Bhai bawal match miss kar diya! NZ ne jhatke diye par India ne ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} tak counter-punch kar diya!`;
+        } else if (stats.runs >= 30) {
+          hinglishHeadline = `Bhai kya dhulai chal rahi hai! India ne ${stats.totalBalls} balls mein ${stats.runs} runs thok ke match apne pakad mein kar liya!`;
+        } else {
+          hinglishHeadline = `Tense run-chase chal raha hai bhai! India ne boundary aur sharp running se score ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} pahuncha diya.`;
         }
+
+        let hinglishNarrative: string;
+        if (runsNeededAtPhaseEnd <= 0) {
+          hinglishNarrative = `India ne match ko zabardast andaaz mein finish kar diya!`;
+        } else {
+          hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke beech India ne ${stats.runs} runs banaye ${stats.wickets > 0 ? `${stats.wickets} wicket kho kar` : `bina wicket khoye`}. ${battersSummary} ne ${stats.boundaries} chauke aur ${stats.sixes} chakke jad kar pressure release kiya. Ab over ${toDisplay} par score hai ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}, aur jeet ke liye chahiye ${runsNeededAtPhaseEnd} runs ${ballsRemainingAtPhaseEnd} balls mein!`;
+        }
+
+        recapPayload.hinglishOneLiner = hinglishHeadline;
+        recapPayload.hinglishStory = hinglishNarrative;
 
         // Cache completed result
         recapCache.set(cacheKey, recapPayload);

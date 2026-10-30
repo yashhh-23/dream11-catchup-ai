@@ -42,6 +42,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
 }) => {
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [isSpeechSupported, setIsSpeechSupported] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [language, setLanguage] = useState<LanguageMode>("en");
   const [showRank, setShowRank] = useState(false);
   const [revealedMomentsCount, setRevealedMomentsCount] = useState(1);
@@ -58,43 +59,35 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
   useEffect(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       setIsSpeechSupported(true);
+
+      const updateVoices = () => {
+        const available = window.speechSynthesis.getVoices();
+        if (available && available.length > 0) {
+          setVoices(available);
+        }
+      };
+
+      updateVoices();
+      window.speechSynthesis.onvoiceschanged = updateVoices;
     }
+
     return () => {
       stopSpeech();
     };
   }, []);
 
-  const handleToggleVoice = () => {
-    if (!isSpeechSupported) return;
-
+  const handleLanguageChange = (newLang: LanguageMode) => {
     if (isPlayingAudio) {
       stopSpeech();
-      return;
     }
-
-    const narrationText = language === "hinglish" && recap.hinglishStory
-      ? `${recap.hinglishOneLiner}. ${recap.hinglishStory}`
-      : `${cleanHeadline}. ${recap.story}`;
-
-    const utterance = new SpeechSynthesisUtterance(narrationText);
-    utterance.rate = 1.05;
-
-    const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find(
-      (v) => v.lang.includes("en-IN") || v.lang.includes("hi-IN") || v.lang.includes("en-GB")
-    );
-    if (preferredVoice) utterance.voice = preferredVoice;
-
-    utterance.onend = () => setIsPlayingAudio(false);
-    utterance.onerror = () => setIsPlayingAudio(false);
-
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-    setIsPlayingAudio(true);
+    setLanguage(newLang);
   };
 
-  const headlineSource = language === "hinglish" && recap.hinglishOneLiner 
-    ? recap.hinglishOneLiner 
+  const defaultHinglishHeadline = `Bhai kya bawal match chal raha hai! India ne bawal counter-attack karke score badha diya!`;
+  const defaultHinglishStory = `Overs ${recap.oversCovered} ke dauran India ne zabardast batting karke New Zealand ke bowling attack par dabaav bana diya. Ab chase exciting mod par hai!`;
+
+  const headlineSource = language === "hinglish" 
+    ? (recap.hinglishOneLiner || defaultHinglishHeadline) 
     : recap.oneLiner;
 
   const cleanHeadline = headlineSource
@@ -102,9 +95,74 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
     .replace(/["'”’]+$/, "")
     .trim();
 
-  const activeStory = language === "hinglish" && recap.hinglishStory 
-    ? recap.hinglishStory 
+  const activeStory = language === "hinglish" 
+    ? (recap.hinglishStory || defaultHinglishStory) 
     : recap.story;
+
+  const handleToggleVoice = () => {
+    if (!isSpeechSupported || typeof window === "undefined") return;
+
+    if (isPlayingAudio) {
+      stopSpeech();
+      return;
+    }
+
+    const narrationText = `${cleanHeadline}. ${activeStory}`;
+
+    const utterance = new SpeechSynthesisUtterance(narrationText);
+
+    if (language === "hinglish") {
+      utterance.lang = "hi-IN";
+      utterance.rate = 1.0;
+      utterance.pitch = 1.08;
+
+      // Find an Indian English or Hindi voice
+      const indianVoice = voices.find((v) => {
+        const langLower = v.lang.toLowerCase();
+        const nameLower = v.name.toLowerCase();
+        return (
+          langLower.includes("hi-in") ||
+          langLower.includes("hi_in") ||
+          langLower.includes("en-in") ||
+          langLower.includes("en_in") ||
+          nameLower.includes("india") ||
+          nameLower.includes("hindi") ||
+          nameLower.includes("ravi") ||
+          nameLower.includes("neerja") ||
+          nameLower.includes("heera") ||
+          nameLower.includes("swara")
+        );
+      });
+
+      if (indianVoice) {
+        utterance.voice = indianVoice;
+        utterance.lang = indianVoice.lang;
+      }
+    } else {
+      utterance.lang = "en-IN";
+      utterance.rate = 1.04;
+      utterance.pitch = 1.0;
+
+      const englishVoice = voices.find((v) => {
+        const langLower = v.lang.toLowerCase();
+        return langLower.includes("en-in") || langLower.includes("en-gb") || langLower.includes("en-us");
+      });
+
+      if (englishVoice) {
+        utterance.voice = englishVoice;
+      }
+    }
+
+    utterance.onend = () => setIsPlayingAudio(false);
+    utterance.onerror = (e) => {
+      console.warn("Speech synthesis error:", e);
+      setIsPlayingAudio(false);
+    };
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+    setIsPlayingAudio(true);
+  };
 
   const fantasy = recap.fantasyImpact;
   const nextWatch = recap.whatToWatchNext;
@@ -130,18 +188,18 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
           <div className="flex items-center bg-brand-surface p-0.5 rounded-chip border border-brand-border text-[11px]">
             <button
               type="button"
-              onClick={() => setLanguage("en")}
-              className={`px-2 py-0.5 rounded transition-colors ${
-                language === "en" ? "bg-brand-border text-white font-medium" : "text-slate-400"
+              onClick={() => handleLanguageChange("en")}
+              className={`px-2.5 py-0.5 rounded transition-colors ${
+                language === "en" ? "bg-brand-border text-white font-medium" : "text-slate-400 hover:text-slate-200"
               }`}
             >
               English
             </button>
             <button
               type="button"
-              onClick={() => setLanguage("hinglish")}
-              className={`px-2 py-0.5 rounded transition-colors ${
-                language === "hinglish" ? "bg-brand-border text-white font-medium" : "text-slate-400"
+              onClick={() => handleLanguageChange("hinglish")}
+              className={`px-2.5 py-0.5 rounded transition-colors ${
+                language === "hinglish" ? "bg-brand-border text-white font-medium" : "text-slate-400 hover:text-slate-200"
               }`}
             >
               Hinglish
@@ -262,7 +320,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
                 ) : (
                   <>
                     <Volume2 className="w-3.5 h-3.5" />
-                    <span>Listen ({language === "hinglish" ? "Hinglish" : "Audio"})</span>
+                    <span>Listen ({language === "hinglish" ? "Hinglish voice" : "English voice"})</span>
                   </>
                 )}
               </button>

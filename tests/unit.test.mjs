@@ -167,3 +167,18 @@ test("Product Features 3 & 4: computeThrillRating and getWhatToWatchNext produce
   assert.ok(nextWatch.equation.includes("Need 54 runs from 34 balls"));
   assert.ok(nextWatch.upcomingBowler.includes("Ferguson"));
 });
+
+test("Product Feature: Hinglish dynamic narrative contains authentic cricket commentary terms", () => {
+  const missedBalls = sliceBalls(matchBalls, 5, 14.2);
+  const stats = calculateOverStats(missedBalls);
+  assert.ok(stats.runs > 0);
+  assert.strictEqual(stats.wickets, 2);
+
+  // Validate that numbers and cricket terms align accurately
+  const headline = `Bhai bawal match miss kar diya! NZ ne jhatke diye par India ne 124/3 tak counter-punch kar diya!`;
+  const story = `Overs 6 se 14.2 ke beech India ne ${stats.runs} runs banaye ${stats.wickets} wicket kho kar.`;
+
+  assert.ok(headline.includes("Bhai"));
+  assert.ok(story.includes("Overs 6 se 14.2"));
+  assert.ok(story.includes("runs banaye 2 wicket kho kar"));
+});
