@@ -53,7 +53,7 @@ export interface RecapPayload {
   story: string;
   top3Moments: TurningPointMoment[];
   mood: "Cruising" | "Knife's edge" | "Chasing hard" | "Game over" | "Comeback on";
-  moodEmoji: string;
+  moodEmoji?: string;
   partnershipSummary?: string;
   oversCovered: string;   // e.g. "Overs 5 – 14"
 }

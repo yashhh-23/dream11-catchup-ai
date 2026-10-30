@@ -82,7 +82,6 @@ export async function POST(req: NextRequest) {
               swingDelta: m.swingDelta ?? Math.abs((m.winProbAfter ?? 0.5) - (m.winProbBefore ?? 0.5)),
             })),
             mood: parsed.mood,
-            moodEmoji: parsed.moodEmoji || "⚡",
             partnershipSummary: parsed.partnershipSummary || `${stats.runs} runs scored for the loss of ${stats.wickets} wickets in this phase.`,
             oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
           };
@@ -101,16 +100,12 @@ export async function POST(req: NextRequest) {
       const topMoments = getTopMomentsFallback(missedBalls, 3);
       
       let mood: RecapPayload["mood"] = "Knife's edge";
-      let moodEmoji = "⚡";
       if (stats.wickets >= 3) {
         mood = "Knife's edge";
-        moodEmoji = "🔪";
       } else if (stats.runs > 40 && stats.wickets <= 1) {
         mood = "Cruising";
-        moodEmoji = "🚀";
       } else if (stats.runRate < "7.0") {
         mood = "Chasing hard";
-        moodEmoji = "⏳";
       }
 
       recapPayload = {
@@ -122,7 +117,6 @@ export async function POST(req: NextRequest) {
         } Tilak Varma and the middle order fought back with intent, keeping the required rate within reach. India now need 54 runs from the remaining 34 deliveries with 7 wickets in hand.`,
         top3Moments: topMoments,
         mood,
-        moodEmoji,
         partnershipSummary: `Phase Stats: ${stats.runs} runs off ${stats.totalBalls} balls (${stats.boundaries} fours, ${stats.sixes} sixes).`,
         oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
       };

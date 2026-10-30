@@ -11,8 +11,12 @@ import {
   Flame,
   TrendingDown,
   TrendingUp,
-  Award,
   Zap,
+  Rocket,
+  Clock,
+  Flag,
+  Activity,
+  Lightbulb,
 } from "lucide-react";
 
 interface RecapScreenProps {
@@ -92,6 +96,23 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
     }
   };
 
+  const renderMoodIcon = (mood: RecapPayload["mood"]) => {
+    switch (mood) {
+      case "Cruising":
+        return <Rocket className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
+      case "Knife's edge":
+        return <Flame className="w-3.5 h-3.5 text-rose-400 shrink-0" />;
+      case "Chasing hard":
+        return <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
+      case "Comeback on":
+        return <Zap className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
+      case "Game over":
+        return <Flag className="w-3.5 h-3.5 text-slate-400 shrink-0" />;
+      default:
+        return <Activity className="w-3.5 h-3.5 text-slate-300 shrink-0" />;
+    }
+  };
+
   return (
     <div className="w-full max-w-2xl mx-auto px-4 py-6 animate-fadeIn pb-24">
       {/* Navigation & Header */}
@@ -121,11 +142,11 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
         {/* Mood and Headline */}
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div
-            className={`px-3 py-1 rounded-full border text-xs font-bold inline-flex items-center gap-1.5 ${getMoodBadgeClass(
+            className={`px-3 py-1 rounded-full border text-xs font-bold inline-flex items-center gap-2 ${getMoodBadgeClass(
               recap.mood
             )}`}
           >
-            <span>{recap.moodEmoji}</span>
+            {renderMoodIcon(recap.mood)}
             <span>Mood: {recap.mood}</span>
           </div>
 
@@ -247,8 +268,9 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
                 <div className="text-xs text-slate-300 mb-1 leading-normal">
                   {moment.description}
                 </div>
-                <div className="text-[11px] text-slate-400 italic">
-                  💡 {moment.impact}
+                <div className="text-[11px] text-slate-400 italic flex items-center gap-1.5 mt-1">
+                  <Lightbulb className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>{moment.impact}</span>
                 </div>
               </div>
             );

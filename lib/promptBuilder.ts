@@ -36,7 +36,6 @@ Return ONLY a valid JSON object in this exact schema (no markdown, no backticks,
     }
   ],
   "mood": "Knife's edge",
-  "moodEmoji": "⚡",
   "partnershipSummary": "Tilak Varma and Hardik Pandya stabilized the innings with a counter-attacking stand."
 }
 
