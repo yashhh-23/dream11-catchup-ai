@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Ball } from "@/types";
 import { isBallInRange, EVENT_STYLE, classifyBall } from "@/lib/matchUtils";
 import { X } from "lucide-react";
@@ -32,8 +32,8 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
   missedFromOver,
   missedToOver,
 }) => {
-  const [pinnedPoint, setPinnedPoint] = useState<PointDetails | null>(null);
-  const [hoveredPoint, setHoveredPoint] = useState<PointDetails | null>(null);
+  const [pinnedIdx, setPinnedIdx] = useState<number | null>(null);
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const width = 600;
   const height = 180;
@@ -44,37 +44,87 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
 
   const chartW = width - padLeft - padRight;
   const chartH = height - padTop - padBottom;
-
   const totalBalls = balls.length;
 
-  const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
-  const getY = (prob: number) => padTop + chartH - prob * chartH;
+  const {
+    pathD,
+    windowX1,
+    windowW,
+    allDots,
+    significantDots,
+    xTicks,
+  } = useMemo(() => {
+    const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
+    const getY = (prob: number) => padTop + chartH - prob * chartH;
 
-  const points = balls.map((b, i) => `${getX(i).toFixed(1)},${getY(b.winProbability).toFixed(1)}`);
-  const pathD = `M ${points.join(" L ")}`;
+    const points = balls.map((b, i) => `${getX(i).toFixed(1)},${getY(b.winProbability).toFixed(1)}`);
+    const path = `M ${points.join(" L ")}`;
 
-  const startIdx = Math.max(0, balls.findIndex(b => isBallInRange(b, missedFromOver, missedToOver)));
-  let lastMatchingIdx = -1;
-  for (let i = balls.length - 1; i >= 0; i--) {
-    if (isBallInRange(balls[i], missedFromOver, missedToOver)) {
-      lastMatchingIdx = i;
-      break;
+    let startIdx = 0;
+    while (startIdx < balls.length && balls[startIdx].over < missedFromOver) {
+      startIdx++;
     }
-  }
-  const safeEndIdx = lastMatchingIdx === -1 ? totalBalls - 1 : lastMatchingIdx;
 
-  const windowX1 = getX(startIdx);
-  const windowX2 = getX(safeEndIdx);
-  const windowW = Math.max(0, windowX2 - windowX1);
-
-  const activePoint = pinnedPoint || hoveredPoint;
-
-  const handlePointClick = (point: PointDetails) => {
-    if (pinnedPoint && pinnedPoint.idx === point.idx) {
-      setPinnedPoint(null);
-    } else {
-      setPinnedPoint(point);
+    const toCompleted = Math.floor(missedToOver);
+    const toFraction = Math.round((missedToOver - toCompleted) * 10);
+    let endIdx = startIdx;
+    while (endIdx < balls.length) {
+      const b = balls[endIdx];
+      const inRange = toFraction > 0
+        ? (b.over < toCompleted || (b.over === toCompleted && b.ball <= toFraction))
+        : (b.over < toCompleted);
+      if (!inRange) break;
+      endIdx++;
     }
+    const safeEndIdx = Math.max(startIdx, endIdx - 1);
+
+    const wX1 = getX(startIdx);
+    const wX2 = getX(safeEndIdx);
+    const wW = Math.max(0, wX2 - wX1);
+
+    const dots: PointDetails[] = balls.map((b, idx) => {
+      const kind = classifyBall(b);
+      return {
+        idx,
+        overText: `Over ${b.over}.${b.ball}`,
+        prob: Math.round(b.winProbability * 100),
+        score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
+        commentary: b.commentary,
+        isWicket: kind === "wicket",
+        isSix: kind === "six",
+        isFour: kind === "four",
+        batter: b.batter,
+        bowler: b.bowler,
+        runs: b.runs,
+        cx: getX(idx),
+        cy: getY(b.winProbability),
+      };
+    });
+
+    const sigDots = dots.filter(d => d.isWicket || d.isSix || d.isFour || isBallInRange(balls[d.idx], missedFromOver, missedToOver));
+
+    const ticks = [
+      { label: "Ov 1", x: getX(0) },
+      { label: "Ov 6", x: getX(Math.min(35, totalBalls - 1)) },
+      { label: "Ov 10", x: getX(Math.min(59, totalBalls - 1)) },
+      { label: "Ov 15", x: getX(Math.min(85, totalBalls - 1)) },
+    ];
+
+    return {
+      pathD: path,
+      windowX1: wX1,
+      windowW: wW,
+      allDots: dots,
+      significantDots: sigDots,
+      xTicks: ticks,
+    };
+  }, [balls, missedFromOver, missedToOver, totalBalls, chartW, chartH]);
+
+  const activeIdx = pinnedIdx ?? hoveredIdx;
+  const activePoint = activeIdx !== null ? allDots[activeIdx] : null;
+
+  const handlePointClick = (idx: number) => {
+    setPinnedIdx(prev => (prev === idx ? null : idx));
   };
 
   return (
@@ -111,11 +161,6 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
           className="w-full h-auto overflow-visible select-none"
         >
           <defs>
-            <linearGradient id="flatAreaGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.16" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-            </linearGradient>
-
             <linearGradient id="windowFill" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.12" />
               <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.02" />
@@ -139,7 +184,7 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
 
           {/* Horizontal Grid lines */}
           {[0.25, 0.5, 0.75].map((level) => {
-            const y = getY(level);
+            const y = padTop + chartH - level * chartH;
             return (
               <g key={level}>
                 <line
@@ -165,27 +210,19 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
           })}
 
           {/* X Axis ticks */}
-          {[
-            { label: "Ov 1", ballIdx: 0 },
-            { label: "Ov 6", ballIdx: 35 },
-            { label: "Ov 10", ballIdx: 59 },
-            { label: "Ov 15", ballIdx: 89 },
-          ].map((tick) => {
-            const x = getX(tick.ballIdx);
-            return (
-              <text
-                key={tick.label}
-                x={x}
-                y={padTop + chartH + 15}
-                fontSize={9}
-                fill="#64748b"
-                textAnchor="middle"
-                className="font-mono"
-              >
-                {tick.label}
-              </text>
-            );
-          })}
+          {xTicks.map((tick) => (
+            <text
+              key={tick.label}
+              x={tick.x}
+              y={padTop + chartH + 15}
+              fontSize={9}
+              fill="#64748b"
+              textAnchor="middle"
+              className="font-mono"
+            >
+              {tick.label}
+            </text>
+          ))}
 
           {/* Probability curve path */}
           <path
@@ -204,79 +241,64 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
               y1={padTop}
               x2={activePoint.cx}
               y2={padTop + chartH}
-              stroke="#94a3b8"
-              strokeDasharray="3 3"
+              stroke="#cbd5e1"
+              strokeDasharray="2 2"
               strokeWidth={1}
-              strokeOpacity={0.6}
+              className="opacity-70 pointer-events-none"
             />
           )}
 
-          {/* Key Deliveries */}
-          {balls.map((b, i) => {
-            const kind = classifyBall(b);
-            const isSignificant = kind === "wicket" || kind === "six" || kind === "four";
+          {/* Interactive Dots for Key Deliveries */}
+          {significantDots.map((point) => {
+            const isSelected = activePoint?.idx === point.idx;
+            const isPinnedThis = pinnedIdx === point.idx;
 
-            if (!isSignificant) return null;
+            const fillColor = point.isWicket
+              ? "#ef4444"
+              : point.isSix
+              ? "#10b981"
+              : point.isFour
+              ? "#3b82f6"
+              : "#64748b";
 
-            const cx = getX(i);
-            const cy = getY(b.winProbability);
-            const isSelected = pinnedPoint?.idx === i;
-            const isHovered = hoveredPoint?.idx === i;
-
-            const pointData: PointDetails = {
-              idx: i,
-              overText: `Over ${b.over}.${b.ball}`,
-              prob: Math.round(b.winProbability * 100),
-              score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
-              commentary: b.commentary,
-              isWicket: kind === "wicket",
-              isSix: kind === "six",
-              isFour: kind === "four",
-              batter: b.batter,
-              bowler: b.bowler,
-              runs: b.runs,
-              cx,
-              cy,
-            };
-
-            const fillColor = EVENT_STYLE[kind].chartColor;
+            const radius = isSelected ? 5.5 : (point.isWicket || point.isSix ? 4 : 3);
 
             return (
               <g
-                key={i}
+                key={point.idx}
                 className="cursor-pointer"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlePointClick(pointData);
-                }}
-                onMouseEnter={() => setHoveredPoint(pointData)}
-                onMouseLeave={() => setHoveredPoint(null)}
+                onClick={() => handlePointClick(point.idx)}
+                onMouseEnter={() => setHoveredIdx(point.idx)}
+                onMouseLeave={() => setHoveredIdx(null)}
               >
+                {/* Hit target for easy tapping on mobile */}
                 <circle
-                  cx={cx}
-                  cy={cy}
-                  r={12}
+                  cx={point.cx}
+                  cy={point.cy}
+                  r={14}
                   fill="transparent"
-                  className="cursor-pointer"
                 />
 
-                {(isSelected || isHovered) && (
+                {/* Highlight ring if pinned */}
+                {isPinnedThis && (
                   <circle
-                    cx={cx}
-                    cy={cy}
-                    r={7}
-                    fill={fillColor}
-                    opacity={0.3}
+                    cx={point.cx}
+                    cy={point.cy}
+                    r={radius + 4}
+                    fill="none"
+                    stroke="#ffffff"
+                    strokeWidth={1.5}
+                    strokeDasharray="2 2"
                   />
                 )}
 
                 <circle
-                  cx={cx}
-                  cy={cy}
-                  r={isSelected || isHovered ? 4.5 : 3.5}
+                  cx={point.cx}
+                  cy={point.cy}
+                  r={radius}
                   fill={fillColor}
-                  stroke="#161B22"
-                  strokeWidth={1.5}
+                  stroke={isSelected ? "#ffffff" : "#0E1116"}
+                  strokeWidth={isSelected ? 2 : 1}
                 />
               </g>
             );
@@ -284,63 +306,72 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
         </svg>
       </div>
 
-      {/* Stable Details Container */}
-      <div className="min-h-[72px] flex items-center">
-        {activePoint ? (
-          <div className="w-full p-3 rounded-chip bg-brand-bg border border-brand-border text-xs space-y-1.5 transition-all">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-200">
-                  {activePoint.overText}
+      {/* Inspector Details Box below chart */}
+      {activePoint ? (
+        <div className="p-3.5 rounded-chip bg-brand-bg border border-brand-border animate-fadeIn relative">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-200 text-xs">
+                {activePoint.overText}
+              </span>
+              <span className="text-slate-400 text-xs">
+                {activePoint.bowler} to {activePoint.batter}
+              </span>
+              {activePoint.isWicket && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                  WICKET
                 </span>
-                <span className="text-slate-400">·</span>
-                <span className="text-slate-300">
-                  {activePoint.batter} vs {activePoint.bowler}
+              )}
+              {activePoint.isSix && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  SIX
                 </span>
-                <span
-                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                    activePoint.isWicket
-                      ? EVENT_STYLE.wicket.badge
-                      : activePoint.isSix
-                      ? EVENT_STYLE.six.badge
-                      : EVENT_STYLE.four.badge
-                  }`}
-                >
-                  {activePoint.isWicket ? "WICKET" : activePoint.isSix ? "SIX" : "FOUR"}
+              )}
+              {activePoint.isFour && (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                  FOUR
                 </span>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="text-right">
-                  <span className="tabular-nums font-bold text-emerald-400">
-                    {activePoint.prob}%
-                  </span>
-                  <span className="text-[10px] text-slate-500 ml-1">
-                    ({activePoint.score})
-                  </span>
-                </div>
-                {pinnedPoint && (
-                  <button
-                    type="button"
-                    onClick={() => setPinnedPoint(null)}
-                    className="p-1 rounded hover:bg-brand-surface text-slate-400 hover:text-slate-200 transition-colors"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
+              )}
             </div>
 
-            <p className="text-slate-300 text-[11px] leading-relaxed">
-              {activePoint.commentary}
-            </p>
+            <div className="flex items-center gap-2">
+              <span className="tabular-nums font-semibold text-xs text-emerald-400">
+                {activePoint.prob}% win
+              </span>
+              <span className="tabular-nums text-[11px] text-slate-400">
+                ({activePoint.score})
+              </span>
+              {pinnedIdx !== null && (
+                <button
+                  type="button"
+                  onClick={() => setPinnedIdx(null)}
+                  className="text-slate-500 hover:text-slate-300 transition-colors p-0.5"
+                  title="Unpin details"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="w-full py-2.5 px-3 rounded-chip bg-brand-bg/50 border border-brand-border/40 text-center text-[11px] text-slate-500">
-            Tap a dot for details
+
+          <p className="text-xs text-slate-300 leading-relaxed font-sans">
+            {activePoint.commentary}
+          </p>
+
+          <div className="mt-1.5 text-[10px] text-slate-500 flex items-center justify-between">
+            <span>
+              {pinnedIdx !== null ? "Pinned delivery" : "Hovering to preview"}
+            </span>
+            <span>
+              {pinnedIdx !== null ? "Click X to unpin" : "Click dot to keep details open"}
+            </span>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="text-[11px] text-slate-500 text-center py-1">
+          Hover or tap any dot on the chart to inspect ball details
+        </div>
+      )}
     </div>
   );
 };

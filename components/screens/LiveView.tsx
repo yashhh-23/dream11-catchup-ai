@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Ball, MatchMeta } from "@/types";
 import { classifyBall, EVENT_STYLE } from "@/lib/matchUtils";
 import {
@@ -36,58 +36,83 @@ const CHAT_MESSAGES = [
 
 export const LiveView: React.FC<LiveViewProps> = ({
   meta,
-  balls,
+  balls: initialBalls,
   onBackToRecap,
   onResetToGate,
 }) => {
   const initialLiveIndex = meta.liveBallIndex ?? 85;
 
+  const [liveBalls, setLiveBalls] = useState<Ball[]>(initialBalls);
   const [currentIndex, setCurrentIndex] = useState<number>(initialLiveIndex);
   const [isPlayingAuto, setIsPlayingAuto] = useState<boolean>(true);
   const [showDemoControls, setShowDemoControls] = useState<boolean>(false);
+  const [isFinished, setIsFinished] = useState<boolean>(false);
 
-  const currentBall = balls[currentIndex] || balls[balls.length - 1];
-  const isMatchFinished = currentIndex >= balls.length - 1;
+  const currentBall = liveBalls[currentIndex] || liveBalls[liveBalls.length - 1];
+
+  const fetchNextDelta = useCallback(async (targetIdx: number) => {
+    if (targetIdx < liveBalls.length) {
+      setCurrentIndex(targetIdx);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/match/delta?matchId=${meta.matchId}&index=${targetIdx}`);
+      const json = await res.json();
+
+      if (json.success && json.data) {
+        if (json.data.ball) {
+          setLiveBalls(prev => [...prev, json.data.ball]);
+          setCurrentIndex(targetIdx);
+        }
+        if (json.data.isMatchFinished) {
+          setIsFinished(true);
+          setIsPlayingAuto(false);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch next delta ball:", e);
+      setIsPlayingAuto(false);
+    }
+  }, [liveBalls.length, meta.matchId]);
 
   useEffect(() => {
-    if (!isPlayingAuto || isMatchFinished) return;
+    if (!isPlayingAuto || isFinished) return;
 
     const timer = setInterval(() => {
-      setCurrentIndex((prev) => {
-        if (prev < balls.length - 1) {
-          return prev + 1;
-        }
-        setIsPlayingAuto(false);
-        return prev;
-      });
+      fetchNextDelta(currentIndex + 1);
     }, 4500);
 
     return () => clearInterval(timer);
-  }, [isPlayingAuto, isMatchFinished, balls]);
+  }, [isPlayingAuto, isFinished, currentIndex, fetchNextDelta]);
 
   const handleStepNext = () => {
-    if (currentIndex < balls.length - 1) {
-      setCurrentIndex(currentIndex + 1);
+    if (!isFinished) {
+      fetchNextDelta(currentIndex + 1);
     }
   };
 
   const handleResetToLiveStart = () => {
     setCurrentIndex(initialLiveIndex);
+    setIsFinished(false);
   };
 
   const totalTarget = meta.target;
-  const currentRuns = currentBall.cumulativeScore;
-  const currentWickets = currentBall.cumulativeWickets;
+  const currentRuns = currentBall?.cumulativeScore ?? 124;
+  const currentWickets = currentBall?.cumulativeWickets ?? 3;
   const runsNeeded = Math.max(0, totalTarget - currentRuns);
 
-  const ballsCompleted = (currentBall.over * 6) + currentBall.ball;
+  const ballsCompleted = ((currentBall?.over ?? 14) * 6) + (currentBall?.ball ?? 2);
   const ballsRemaining = Math.max(0, (meta.totalOvers * 6) - ballsCompleted);
 
   const crr = ballsCompleted > 0 ? ((currentRuns / ballsCompleted) * 6).toFixed(2) : "0.0";
   const rrr = ballsRemaining > 0 ? ((runsNeeded / ballsRemaining) * 6).toFixed(2) : "0.0";
-  const winProb = Math.round(currentBall.winProbability * 100);
+  const winProb = Math.round((currentBall?.winProbability ?? 0.8) * 100);
 
-  const recentBalls = balls.slice(Math.max(0, currentIndex - 5), currentIndex + 1);
+  // Deliveries strictly belonging to the current over up to current ball
+  const currentOverBalls = liveBalls.filter(
+    b => b.over === currentBall.over && b.ball <= currentBall.ball
+  );
 
   return (
     <div className="w-full max-w-xl mx-auto px-4 py-8 pb-20">
@@ -185,8 +210,8 @@ export const LiveView: React.FC<LiveViewProps> = ({
 
         <div className="border-t border-brand-border" />
 
-        {/* Current Over Delivery Strip */}
-        <div className="space-y-3">
+        {/* Current Over Delivery Feed */}
+        <div className="space-y-2.5">
           <div className="flex items-center justify-between text-xs">
             <span className="font-semibold text-slate-300">
               Current over
@@ -194,16 +219,16 @@ export const LiveView: React.FC<LiveViewProps> = ({
 
             {/* Balls strip */}
             <div className="flex items-center gap-1.5">
-              {recentBalls.map((b, idx) => {
+              {currentOverBalls.map((b, idx) => {
                 const kind = classifyBall(b);
-                const isCurrent = idx === recentBalls.length - 1;
+                const isCurrent = idx === currentOverBalls.length - 1;
                 const circleStyle = EVENT_STYLE[kind].circle;
 
                 return (
                   <div
                     key={idx}
                     className={`w-6 h-6 rounded-full flex items-center justify-center tabular-nums text-xs font-semibold transition-all ${circleStyle} ${
-                      isCurrent ? "ring-2 ring-white ring-offset-1 ring-offset-[#161B22]" : ""
+                      isCurrent ? "ring-2 ring-white ring-offset-1 ring-offset-brand-surface" : ""
                     }`}
                   >
                     {kind === "wicket" ? "W" : b.runs}
@@ -238,12 +263,16 @@ export const LiveView: React.FC<LiveViewProps> = ({
           <div className="divide-y divide-brand-border text-xs">
             {CHAT_MESSAGES.map((chat, idx) => (
               <div key={idx} className="flex items-start gap-2.5 py-2">
-                <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-[10px] text-slate-300 shrink-0">
+                <div className="w-6 h-6 rounded-full bg-brand-bg border border-brand-border flex items-center justify-center text-[10px] font-semibold text-slate-300 shrink-0">
                   {chat.avatar}
                 </div>
-                <div>
-                  <span className="font-semibold text-slate-200">{chat.name}: </span>
-                  <span className="text-slate-300">{chat.message}</span>
+                <div className="space-y-0.5">
+                  <span className="font-medium text-slate-200 mr-2">
+                    {chat.name}:
+                  </span>
+                  <span className="text-slate-400">
+                    {chat.message}
+                  </span>
                 </div>
               </div>
             ))}
@@ -267,7 +296,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsPlayingAuto(!isPlayingAuto)}
-                  disabled={isMatchFinished}
+                  disabled={isFinished}
                   className="px-2.5 py-1 rounded bg-brand-bg hover:bg-brand-surface text-[11px] font-medium text-slate-300 flex items-center gap-1 border border-brand-border disabled:opacity-50"
                 >
                   {isPlayingAuto ? (
@@ -286,7 +315,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
                 <button
                   type="button"
                   onClick={handleStepNext}
-                  disabled={isMatchFinished}
+                  disabled={isFinished}
                   className="px-2.5 py-1 rounded bg-brand-bg hover:bg-brand-surface text-[11px] font-medium text-slate-300 flex items-center gap-1 border border-brand-border disabled:opacity-50"
                 >
                   <SkipForward className="w-3 h-3" />

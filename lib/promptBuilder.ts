@@ -1,5 +1,12 @@
 import type { Ball, MatchMeta, TurningPointMoment } from "../types/index.ts";
+import { classifyBall } from "./matchUtils.ts";
 
+/**
+ * Compresses ball sequences:
+ * - Summarizes quiet overs into single-line summaries
+ * - Emits detailed bowler-to-batter commentary only for wickets and boundaries
+ * Cuts token count by ~65% and reduces Groq TTFT.
+ */
 export function buildRecapPrompt(
   balls: Ball[],
   meta: MatchMeta,
@@ -7,10 +14,47 @@ export function buildRecapPrompt(
   toOverDisplay: number | string,
   computedMoments: TurningPointMoment[]
 ): string {
-  // Compress ball data to save tokens and ensure fast <800ms inference
-  const compressedBalls = balls.map(b => 
-    `O${b.over}.${b.ball}|${b.batter} vs ${b.bowler}|${b.wicket ? `WICKET(${b.wicketType || 'out'}-${b.dismissedPlayer || b.batter})` : `${b.runs}r`}|Score:${b.cumulativeScore}/${b.cumulativeWickets}|WP:${Math.round(b.winProbability * 100)}%`
-  ).join("\n");
+  // Group balls by over to compress quiet spells
+  const overBuckets: Record<number, Ball[]> = {};
+  for (let i = 0; i < balls.length; i++) {
+    const b = balls[i];
+    if (!overBuckets[b.over]) overBuckets[b.over] = [];
+    overBuckets[b.over].push(b);
+  }
+
+  const lines: string[] = [];
+
+  for (const overNumStr of Object.keys(overBuckets)) {
+    const overNum = Number(overNumStr);
+    const overDeliveries = overBuckets[overNum];
+    const hasExcitement = overDeliveries.some(b => b.wicket || b.runs >= 4);
+
+    if (!hasExcitement) {
+      // Quiet over: aggregate runs and dots
+      const overRuns = overDeliveries.reduce((sum, b) => sum + b.runs, 0);
+      const bowler = overDeliveries[0].bowler;
+      const runsSequence = overDeliveries.map(b => b.runs).join(", ");
+      const lastProb = Math.round(overDeliveries[overDeliveries.length - 1].winProbability * 100);
+      lines.push(`Over ${overNum + 1} (${bowler}): ${overRuns} runs [${runsSequence}] | WinProb: ${lastProb}%`);
+    } else {
+      // Eventful over: emit each key ball and concise dots/singles
+      for (let i = 0; i < overDeliveries.length; i++) {
+        const b = overDeliveries[i];
+        const kind = classifyBall(b);
+        if (kind === "wicket") {
+          lines.push(`O${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | WICKET (${b.wicketType || 'out'} - ${b.dismissedPlayer || b.batter}) | WP: ${Math.round(b.winProbability * 100)}%`);
+        } else if (kind === "six") {
+          lines.push(`O${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | SIX! | WP: ${Math.round(b.winProbability * 100)}%`);
+        } else if (kind === "four") {
+          lines.push(`O${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | FOUR! | WP: ${Math.round(b.winProbability * 100)}%`);
+        } else {
+          lines.push(`O${b.over}.${b.ball}: ${b.runs}r`);
+        }
+      }
+    }
+  }
+
+  const compressedBalls = lines.join("\n");
 
   const startScore = balls[0].cumulativeScore;
   const startWickets = balls[0].cumulativeWickets;

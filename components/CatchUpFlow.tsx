@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { matchBalls, matchMeta } from "@/lib/matchData";
+import { publicMatchBalls, matchMeta } from "@/lib/matchData";
 import { RecapPayload, SpoilerLevel } from "@/types";
 import { SpoilerGate } from "@/components/screens/SpoilerGate";
 import { RecapScreen } from "@/components/screens/RecapScreen";
@@ -106,7 +106,7 @@ export const CatchUpFlow: React.FC = () => {
           recap={recapData}
           missedFromOver={fromOver}
           missedToOver={toOver}
-          balls={matchBalls}
+          balls={publicMatchBalls}
           onBackToGate={handleBackToGate}
           onJumpToLive={handleJumpToLiveDirect}
         />
@@ -116,7 +116,7 @@ export const CatchUpFlow: React.FC = () => {
       {appState === "live" && (
         <LiveView
           meta={matchMeta}
-          balls={matchBalls}
+          balls={publicMatchBalls}
           onBackToRecap={handleBackToRecap}
           onResetToGate={handleBackToGate}
         />

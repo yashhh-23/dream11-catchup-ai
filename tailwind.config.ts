@@ -9,8 +9,23 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["'Plus Jakarta Sans'", "-apple-system", "BlinkMacSystemFont", "'Segoe UI'", "Roboto", "sans-serif"],
-        display: ["'Barlow Condensed'", "'Rajdhani'", "-apple-system", "BlinkMacSystemFont", "sans-serif"],
+        sans: [
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "'Segoe UI'",
+          "Roboto",
+          "'Helvetica Neue'",
+          "Arial",
+          "sans-serif"
+        ],
+        display: [
+          "'Barlow Condensed'",
+          "'Rajdhani'",
+          "Impact",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "sans-serif"
+        ],
       },
       colors: {
         brand: {

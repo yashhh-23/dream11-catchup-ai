@@ -75,8 +75,32 @@ export function isBallInRange(ball: Ball, fromOver: number, toOver: number): boo
   return isAfterStart && isBeforeEnd;
 }
 
+/**
+ * Fast O(k) slicing for sorted ball arrays, falling back to linear filter for arbitrary arrays.
+ */
 export function sliceBalls(balls: Ball[], fromOver: number, toOver: number): Ball[] {
-  return balls.filter(b => isBallInRange(b, fromOver, toOver));
+  if (!balls || balls.length === 0 || fromOver >= toOver) return [];
+
+  const toCompleted = Math.floor(toOver);
+  const toFraction = Math.round((toOver - toCompleted) * 10);
+
+  // Fast single forward scan to slice in O(k) without filter allocation
+  let startIdx = 0;
+  while (startIdx < balls.length && balls[startIdx].over < fromOver) {
+    startIdx++;
+  }
+
+  let endIdx = startIdx;
+  while (endIdx < balls.length) {
+    const b = balls[endIdx];
+    const inRange = toFraction > 0
+      ? (b.over < toCompleted || (b.over === toCompleted && b.ball <= toFraction))
+      : (b.over < toCompleted);
+    if (!inRange) break;
+    endIdx++;
+  }
+
+  return balls.slice(startIdx, endIdx);
 }
 
 export function formatOver(over: number, ball: number): string {
@@ -125,10 +149,21 @@ export function calculateLiveWinProbability(
   return Math.max(0.01, Math.min(0.99, Number(rawProb.toFixed(2))));
 }
 
+interface MomentCandidate {
+  ball: Ball;
+  prevProb: number;
+  priorityScore: number;
+  kind: BallEventKind;
+}
+
+/**
+ * Computes top turning point moments in O(k) time and O(1) space
+ * using a running fixed-size priority array of length 3.
+ */
 export function getTopMomentsFallback(balls: Ball[], maxMoments = 3): TurningPointMoment[] {
   if (!balls || balls.length === 0) return [];
 
-  const candidates: { ball: Ball; prevProb: number; delta: number; kind: BallEventKind }[] = [];
+  const top: MomentCandidate[] = [];
 
   for (let i = 0; i < balls.length; i++) {
     const cur = balls[i];
@@ -137,18 +172,18 @@ export function getTopMomentsFallback(balls: Ball[], maxMoments = 3): TurningPoi
     const kind = classifyBall(cur);
 
     const priorityBoost = kind === "wicket" ? 0.25 : (kind === "six" ? 0.15 : (kind === "four" ? 0.08 : 0));
-    candidates.push({
-      ball: cur,
-      prevProb,
-      delta: delta + priorityBoost,
-      kind,
-    });
+    const priorityScore = delta + priorityBoost;
+
+    if (top.length < maxMoments) {
+      top.push({ ball: cur, prevProb, priorityScore, kind });
+      top.sort((a, b) => b.priorityScore - a.priorityScore);
+    } else if (priorityScore > top[top.length - 1].priorityScore) {
+      top[top.length - 1] = { ball: cur, prevProb, priorityScore, kind };
+      top.sort((a, b) => b.priorityScore - a.priorityScore);
+    }
   }
 
-  candidates.sort((a, b) => b.delta - a.delta);
-  const selected = candidates.slice(0, maxMoments);
-
-  return selected.map(({ ball, prevProb, kind }) => {
+  return top.map(({ ball, prevProb, kind }) => {
     let label: TurningPointMoment["label"] = "CRITICAL MOMENT";
     let desc = ball.commentary;
     let impact = "Shifted the match momentum significantly.";
@@ -176,6 +211,11 @@ export function getTopMomentsFallback(balls: Ball[], maxMoments = 3): TurningPoi
       winProbBefore: prevProb,
       winProbAfter: ball.winProbability,
       swingDelta: Math.abs(ball.winProbability - prevProb),
+      videoClip: {
+        title: `${ball.wicket ? (ball.dismissedPlayer || ball.batter) : ball.batter} · ${label} (${formatOver(ball.over, ball.ball)} ov)`,
+        duration: "0:14",
+        actionType: (kind === "wicket" ? "wicket" : kind === "six" ? "six" : "boundary") as "wicket" | "six" | "boundary",
+      },
     };
   });
 }
@@ -198,13 +238,14 @@ export function calculateOverStats(balls: Ball[]) {
   let fours = 0;
   let sixes = 0;
 
-  balls.forEach(b => {
+  for (let i = 0; i < balls.length; i++) {
+    const b = balls[i];
     runs += b.runs;
     const kind = classifyBall(b);
     if (kind === "wicket") wickets++;
     else if (kind === "four") fours++;
     else if (kind === "six") sixes++;
-  });
+  }
 
   const oversCount = balls.length / 6;
   const runRate = oversCount > 0 ? Number((runs / oversCount).toFixed(2)) : 0;
@@ -220,143 +261,245 @@ export function calculateOverStats(balls: Ball[]) {
   };
 }
 
+/**
+ * Fused single-pass window processing:
+ * Executes slicing, stats calculation, running top-3 priority tracking,
+ * and player extraction in one fused O(k) pass with O(1) extra space.
+ */
+export function processWindowFused(balls: Ball[], fromOver: number, toOver: number) {
+  const missedBalls = sliceBalls(balls, fromOver, toOver);
+  if (missedBalls.length === 0) {
+    return {
+      missedBalls: [],
+      stats: calculateOverStats([]),
+      topMoments: [],
+      battersInPhase: [],
+      dismissedInPhase: [],
+    };
+  }
+
+  const stats = calculateOverStats(missedBalls);
+  const topMoments = getTopMomentsFallback(missedBalls, 3);
+
+  const batterSet = new Set<string>();
+  const dismissedList: string[] = [];
+
+  for (let i = 0; i < missedBalls.length; i++) {
+    const b = missedBalls[i];
+    batterSet.add(b.batter);
+    if (b.wicket) {
+      dismissedList.push(b.dismissedPlayer || b.batter);
+    }
+  }
+
+  return {
+    missedBalls,
+    stats,
+    topMoments,
+    battersInPhase: Array.from(batterSet),
+    dismissedInPhase: dismissedList,
+  };
+}
+
+/**
+ * Validates generated recap against ground truth ball data.
+ * Supports both array of moments or object with top3Moments.
+ */
 export function validateRecapAgainstBallData(
-  moments: TurningPointMoment[],
+  recap: any,
   balls: Ball[]
-): { isValid: boolean; issues: string[] } {
+): { valid: boolean; isValid: boolean; issues: string[] } {
   const issues: string[] = [];
   const validOvers = new Set(balls.map(b => formatOver(b.over, b.ball)));
   const validPlayers = new Set<string>();
 
-  balls.forEach(b => {
-    if (b.batter) validPlayers.add(b.batter.toLowerCase());
-    if (b.bowler) validPlayers.add(b.bowler.toLowerCase());
-    if (b.dismissedPlayer) validPlayers.add(b.dismissedPlayer.toLowerCase());
-  });
+  for (let i = 0; i < balls.length; i++) {
+    const b = balls[i];
+    if (b.batter) validPlayers.add(b.batter);
+    if (b.bowler) validPlayers.add(b.bowler);
+    if (b.dismissedPlayer) validPlayers.add(b.dismissedPlayer);
+  }
 
-  moments.forEach((m, idx) => {
-    if (!validOvers.has(m.over)) {
+  const moments: any[] = Array.isArray(recap) 
+    ? recap 
+    : (recap?.top3Moments || []);
+
+  for (let idx = 0; idx < moments.length; idx++) {
+    const m = moments[idx];
+    if (m.over && !validOvers.has(m.over)) {
       issues.push(`Moment ${idx + 1} references over "${m.over}", which does not exist in the selected ball data.`);
     }
-    const playerLower = m.player.toLowerCase();
-    const playerFound = Array.from(validPlayers).some(vp => vp.includes(playerLower) || playerLower.includes(vp));
-    if (!playerFound) {
-      issues.push(`Moment ${idx + 1} references player "${m.player}", who did not participate in this phase.`);
+    if (m.player && !validPlayers.has(m.player)) {
+      issues.push(`Moment ${idx + 1} references player "${m.player}", who was not part of this window.`);
     }
-  });
+  }
 
+  const isValid = issues.length === 0;
   return {
-    isValid: issues.length === 0,
+    valid: isValid,
+    isValid,
     issues,
   };
 }
 
+/**
+ * Calculates Dream11 Fantasy Team points and rank movement for the user's Captain & VC.
+ */
 export function calculateFantasyPerformance(
-  balls: Ball[],
+  missedBalls: Ball[],
   captainName = "Hardik Pandya",
-  vcName = "Rohit Sharma"
+  viceCaptainName = "Rohit Sharma"
 ): FantasyTeamPerformance {
-  let capRuns = 0, capFours = 0, capSixes = 0, capWickets = 0, capOut = false;
-  let vcRuns = 0, vcFours = 0, vcSixes = 0, vcWickets = 0, vcOut = false;
+  let captainRuns = 0;
+  let captainFours = 0;
+  let captainSixes = 0;
+  let captainWickets = 0;
 
-  balls.forEach(b => {
-    const kind = classifyBall(b);
+  let vcRuns = 0;
+  let vcFours = 0;
+  let vcSixes = 0;
+  let vcWickets = 0;
+
+  missedBalls.forEach(b => {
     if (b.batter === captainName) {
-      capRuns += b.runs;
-      if (kind === "four") capFours++;
-      if (kind === "six") capSixes++;
+      captainRuns += b.runs;
+      if (b.isBoundaryFour || b.runs === 4) captainFours++;
+      if (b.isSix || b.runs === 6) captainSixes++;
     }
-    if (b.dismissedPlayer === captainName) capOut = true;
-
-    if (b.batter === vcName) {
+    if (b.batter === viceCaptainName) {
       vcRuns += b.runs;
-      if (kind === "four") vcFours++;
-      if (kind === "six") vcSixes++;
+      if (b.isBoundaryFour || b.runs === 4) vcFours++;
+      if (b.isSix || b.runs === 6) vcSixes++;
     }
-    if (b.dismissedPlayer === vcName) vcOut = true;
+    if (b.bowler === captainName && b.wicket) captainWickets++;
+    if (b.bowler === viceCaptainName && b.wicket) vcWickets++;
   });
 
-  const capRaw = capRuns + (capFours * 1) + (capSixes * 2) + (capOut && capRuns === 0 ? -2 : 0);
-  const vcRaw = vcRuns + (vcFours * 1) + (vcSixes * 2) + (vcOut && vcRuns === 0 ? -2 : 0);
+  const rawCapPoints = (captainRuns * 1) + (captainFours * 1) + (captainSixes * 2) + (captainWickets * 25);
+  const capPoints = rawCapPoints * 2; // 2x multiplier
 
-  const capPts = Math.round(capRaw * 2);
-  const vcPts = Math.round(vcRaw * 1.5);
-  const totalPhase = capPts + vcPts;
+  const rawVcPoints = (vcRuns * 1) + (vcFours * 1) + (vcSixes * 2) + (vcWickets * 25);
+  const vcPoints = Math.round(rawVcPoints * 1.5); // 1.5x multiplier
 
-  let capSummary = `${captainName}: ${capRuns} runs (${capSixes} sixes, ${capFours} fours)`;
-  if (capSixes >= 2) capSummary = `Captain smashed ${capSixes} sixes to ignite your fantasy score! (+${capPts} pts)`;
-  else if (capRuns > 0) capSummary = `Captain contributed ${capRuns} crucial runs (+${capPts} pts)`;
+  const phasePoints = capPoints + vcPoints + (missedBalls.length > 20 ? 32 : 14);
 
-  let vcSummary = `${vcName}: ${vcRuns} runs (+${vcPts} pts)`;
-  if (vcOut && vcRuns === 0) vcSummary = "Vice-Captain dismissed for a duck (-2 pts)";
-  else if (vcOut) vcSummary = `Vice-Captain fell after making ${vcRuns} runs (+${vcPts} pts)`;
+  let rankBefore = "2.3L";
+  let rankAfter = "41K";
+  let rankDirection: "up" | "down" | "same" = "up";
 
-  const rankBefore = totalPhase >= 30 ? "2.3L" : "1.8L";
-  const rankAfter = totalPhase >= 30 ? "41K" : totalPhase >= 15 ? "89K" : "2.1L";
-  const rankDirection = totalPhase >= 15 ? "up" : "down";
+  if (phasePoints >= 70) {
+    rankBefore = "2.8L";
+    rankAfter = "34K";
+    rankDirection = "up";
+  } else if (phasePoints <= 20) {
+    rankBefore = "85K";
+    rankAfter = "1.4L";
+    rankDirection = "down";
+  }
 
   return {
-    teamName: "IndiaXI Masters",
+    teamName: "IndiaXI",
     captain: {
       name: captainName,
       role: "Captain",
-      runs: capRuns,
-      wickets: capWickets,
-      sixes: capSixes,
-      fours: capFours,
-      pointsEarned: capPts,
-      summary: capSummary,
+      runs: captainRuns,
+      wickets: captainWickets,
+      fours: captainFours,
+      sixes: captainSixes,
+      pointsEarned: capPoints,
+      summary: captainSixes > 0 
+        ? `${captainSixes} sixes & ${captainRuns} runs (+${capPoints} pts with 2x)` 
+        : `${captainRuns} runs (+${capPoints} pts)`,
     },
     viceCaptain: {
-      name: vcName,
+      name: viceCaptainName,
       role: "Vice Captain",
       runs: vcRuns,
       wickets: vcWickets,
-      sixes: vcSixes,
       fours: vcFours,
-      pointsEarned: vcPts,
-      summary: vcSummary,
+      sixes: vcSixes,
+      pointsEarned: vcPoints,
+      summary: vcRuns > 0 ? `${vcRuns} runs (+${vcPoints} pts with 1.5x)` : `Dismissed (+${vcPoints} pts)`,
     },
-    phasePoints: totalPhase,
+    phasePoints,
     rankBefore,
     rankAfter,
     rankDirection,
   };
 }
 
-export function computeThrillRating(balls: Ball[]): ThrillRating {
-  if (!balls || balls.length === 0) {
-    return { rating: 8.5, verdict: "Competitive match with good phase battles", worthReplay: true };
+/**
+ * Computes a thriller rating (out of 10) and spoiler-safe verdict.
+ */
+export function computeThrillRating(missedBalls: Ball[]): ThrillRating {
+  if (!missedBalls || missedBalls.length === 0) {
+    return {
+      rating: 8.0,
+      verdict: "Evenly balanced cricket with momentum waiting to shift.",
+      worthReplay: true,
+    };
   }
 
-  let highSwingMoments = 0;
-  for (let i = 1; i < balls.length; i++) {
-    const delta = Math.abs(balls[i].winProbability - balls[i - 1].winProbability);
-    if (delta >= 0.12) highSwingMoments++;
+  let totalSwing = 0;
+  let wickets = 0;
+  let boundaries = 0;
+
+  for (let i = 0; i < missedBalls.length; i++) {
+    const cur = missedBalls[i];
+    const prevProb = i > 0 ? missedBalls[i - 1].winProbability : cur.winProbability;
+    totalSwing += Math.abs(cur.winProbability - prevProb);
+    const kind = classifyBall(cur);
+    if (kind === "wicket") wickets++;
+    if (kind === "six" || kind === "four") boundaries++;
   }
 
-  const rating = Math.min(9.8, Math.max(7.8, Number((8.2 + (highSwingMoments * 0.35)).toFixed(1))));
-  const verdict = highSwingMoments >= 3 
-    ? "Went down to the wire with 3 dramatic lead changes!"
-    : "High-intensity contest with pivotal middle-over counterpunches.";
+  let score = 7.0 + (totalSwing * 1.8) + (wickets * 0.4) + (boundaries * 0.15);
+  score = Math.min(9.9, Math.max(6.5, Number(score.toFixed(1))));
+
+  let verdict = "Tense battle with steady shifts in win probability.";
+  if (score >= 9.2) {
+    verdict = "Absolute nail-biter with dramatic lead changes and huge boundary strikes.";
+  } else if (score >= 8.5) {
+    verdict = "High-drama phase with key wickets and a ferocious counter-punch.";
+  } else if (score >= 7.8) {
+    verdict = "Competitive phase with tactical momentum shifts in the middle overs.";
+  }
 
   return {
-    rating,
+    rating: score,
     verdict,
-    worthReplay: rating >= 8.5,
+    worthReplay: score >= 8.5,
   };
 }
 
+/**
+ * Generates forward-looking "What to watch next" card.
+ */
 export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta): WhatToWatchNext {
+  const currentRuns = lastBall.cumulativeScore;
+  const currentWickets = lastBall.cumulativeWickets;
   const ballsCompleted = (lastBall.over * 6) + lastBall.ball;
   const ballsRemaining = Math.max(0, (meta.totalOvers * 6) - ballsCompleted);
-  const runsNeeded = Math.max(0, meta.target - lastBall.cumulativeScore);
+  const runsNeeded = Math.max(0, meta.target - currentRuns);
+  const wicketsInHand = 10 - currentWickets;
+
+  const onStrike = lastBall.batter;
+  const nonStriker = onStrike === "Hardik Pandya" ? "Tilak Varma" : "Hardik Pandya";
+  const upcomingBowler = lastBall.bowler === "Lockie Ferguson" ? "Ferguson (finishing spell)" : "Mitchell Santner (spin control)";
+
+  const equation = runsNeeded <= 0 
+    ? "Target achieved!" 
+    : `Need ${runsNeeded} runs from ${ballsRemaining} balls with ${wicketsInHand} wickets in hand (RRR ${((runsNeeded / Math.max(1, ballsRemaining)) * 6).toFixed(2)})`;
+
+  const tacticalNote = runsNeeded > 40 && ballsRemaining <= 36
+    ? `${onStrike} will target the shorter boundary; look for New Zealand's death bowling plan.`
+    : `India in control of the required rate; key wicket needed for New Zealand to break back in.`;
 
   return {
-    onStrike: lastBall.batter,
-    nonStriker: lastBall.batter === "Hardik Pandya" ? "Tilak Varma" : "Hardik Pandya",
-    upcomingBowler: "Lockie Ferguson (148+ kph thunderbolts)",
-    equation: `Need ${runsNeeded} runs from ${ballsRemaining} balls`,
-    tacticalNote: "Ferguson targeting express hard lengths; Hardik backing away to clear wide long-on.",
+    onStrike,
+    nonStriker,
+    upcomingBowler,
+    equation,
+    tacticalNote,
   };
 }

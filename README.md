@@ -77,8 +77,12 @@ flowchart TD
 dream11/
 ├── app/                                 # Next.js 14 App Router
 │   ├── api/
+│   │   ├── match/
+│   │   │   ├── route.ts                 # GET /api/match: Zero-spoiler public balls serving
+│   │   │   └── delta/
+│   │   │       └── route.ts             # GET /api/match/delta: On-demand delivery feed streaming
 │   │   └── recap/
-│   │       └── route.ts                 # POST /api/recap: Groq inference + cache + typed API response
+│   │       └── route.ts                 # POST /api/recap: Fused single-pass + in-flight de-duplication + cache
 │   ├── globals.css                      # Design tokens, Tailwind base, and dark mode palette
 │   ├── layout.tsx                       # Root layout & HTML metadata (Dream11 Theme)
 │   └── page.tsx                         # Main page mounting CatchUpFlow component
