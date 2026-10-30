@@ -128,7 +128,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
                 {currentRuns}/{currentWickets}
               </span>
               <span className="tabular-nums text-xs text-slate-400">
-                ({currentBall.over + 1}.{currentBall.ball} ov)
+                ({currentBall.over}.{currentBall.ball} ov)
               </span>
             </div>
 
@@ -217,7 +217,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
           {/* Commentary Block */}
           <div className="p-3.5 rounded-lg bg-[#0E1116] border border-[#262C36] space-y-1 text-xs">
             <div className="font-semibold text-slate-300">
-              Over {currentBall.over + 1}.{currentBall.ball} · {currentBall.bowler} to {currentBall.batter}
+              Over {currentBall.over}.{currentBall.ball} · {currentBall.bowler} to {currentBall.batter}
             </div>
             <p className="text-slate-300 leading-relaxed">
               {cleanCommentary}

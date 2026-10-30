@@ -9,10 +9,10 @@ export function sliceBalls(balls: Ball[], fromOver: number, toOver: number): Bal
 }
 
 /**
- * Format 0-indexed over and ball into standard cricket notation (e.g., over 9, ball 3 -> "10.3")
+ * Format completed over and ball into standard cricket notation (e.g., over 9, ball 2 -> "9.2", over 14, ball 2 -> "14.2")
  */
 export function formatOver(over: number, ball: number): string {
-  return `${over + 1}.${ball}`;
+  return `${over}.${ball}`;
 }
 
 /**

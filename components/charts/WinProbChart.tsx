@@ -248,7 +248,7 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
 
             const pointData: PointDetails = {
               idx: i,
-              overText: `Over ${b.over + 1}.${b.ball}`,
+              overText: `Over ${b.over}.${b.ball}`,
               prob: Math.round(b.winProbability * 100),
               score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
               commentary: b.commentary,

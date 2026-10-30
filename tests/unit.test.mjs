@@ -37,10 +37,10 @@ test("Edge Case D1: Out of bounds range returns empty gracefully", () => {
   assert.strictEqual(outOfBounds.length, 0);
 });
 
-test("formatOver correctly converts 0-indexed over and 1-based ball to cricket standard", () => {
-  assert.strictEqual(formatOver(0, 1), "1.1");
-  assert.strictEqual(formatOver(9, 2), "10.2");
-  assert.strictEqual(formatOver(13, 6), "14.6");
+test("formatOver correctly formats completed over and ball to cricket standard", () => {
+  assert.strictEqual(formatOver(0, 1), "0.1");
+  assert.strictEqual(formatOver(9, 2), "9.2");
+  assert.strictEqual(formatOver(14, 2), "14.2");
 });
 
 test("formatWinProb converts decimal to percentage string", () => {

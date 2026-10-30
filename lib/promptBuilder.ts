@@ -3,7 +3,7 @@ import type { Ball, MatchMeta } from "../types/index.ts";
 export function buildRecapPrompt(balls: Ball[], meta: MatchMeta, fromOverDisplay: number, toOverDisplay: number): string {
   // Compress ball data to save tokens and ensure fast <800ms inference
   const compressedBalls = balls.map(b => 
-    `O${b.over + 1}.${b.ball}|${b.batter} vs ${b.bowler}|${b.wicket ? `WICKET(${b.wicketType || 'out'}-${b.dismissedPlayer || b.batter})` : `${b.runs}r`}|Score:${b.cumulativeScore}/${b.cumulativeWickets}|WP:${Math.round(b.winProbability * 100)}%`
+    `O${b.over}.${b.ball}|${b.batter} vs ${b.bowler}|${b.wicket ? `WICKET(${b.wicketType || 'out'}-${b.dismissedPlayer || b.batter})` : `${b.runs}r`}|Score:${b.cumulativeScore}/${b.cumulativeWickets}|WP:${Math.round(b.winProbability * 100)}%`
   ).join("\n");
 
   const startScore = balls[0].cumulativeScore;
@@ -25,7 +25,7 @@ Return ONLY a valid JSON object in this exact schema (no markdown, no backticks,
   "story": "3 to 4 sentences narrative. Describe how the phase started, the pivotal turning point, the counter-punch, and how things stand right now.",
   "top3Moments": [
     {
-      "over": "10.2",
+      "over": "9.2",
       "label": "WICKET",
       "player": "Rohit Sharma",
       "description": "Clean bowled by Sodhi's wrong-un attempting a pull across the line.",
