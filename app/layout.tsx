@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "CatchUp AI | Dream11 Live Match Companion",
-  description: "Zero-spoiler contextual time-machine for live cricket fans, powered by Dream11 Rhea AI & Groq.",
+  description: "Zero-spoiler live catch-up companion for cricket fans.",
 };
 
 export default function RootLayout({
@@ -13,7 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
-      <body className="min-h-screen bg-slate-950 text-slate-100 antialiased">
+      <body className="min-h-screen bg-[#0E1116] text-[#F0F6FC] antialiased selection:bg-[#E11D48] selection:text-white">
         {children}
       </body>
     </html>

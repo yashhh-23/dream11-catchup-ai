@@ -8,18 +8,25 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["'Plus Jakarta Sans'", "-apple-system", "BlinkMacSystemFont", "'Segoe UI'", "Roboto", "sans-serif"],
+        display: ["'Barlow Condensed'", "'Rajdhani'", "-apple-system", "BlinkMacSystemFont", "sans-serif"],
+      },
       colors: {
-        dreamRed: {
-          50: "#fff1f2",
-          100: "#ffe4e6",
-          500: "#f43f5e",
-          600: "#e11d48",
-          700: "#be123c",
+        brand: {
+          bg: "#0E1116",
+          surface: "#161B22",
+          surfaceHover: "#1C2128",
+          border: "#262C36",
+          muted: "#8B949E",
+          red: "#E11D48",
+          redHover: "#BE123C",
         },
       },
-      animation: {
-        'pulse-subtle': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-      }
+      borderRadius: {
+        container: "12px",
+        chip: "8px",
+      },
     },
   },
   plugins: [],

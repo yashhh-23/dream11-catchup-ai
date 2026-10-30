@@ -6,7 +6,7 @@ import { RecapPayload } from "@/types";
 import { SpoilerGate } from "@/components/screens/SpoilerGate";
 import { RecapScreen } from "@/components/screens/RecapScreen";
 import { LiveView } from "@/components/screens/LiveView";
-import { AlertCircle, RotateCcw, Sparkles } from "lucide-react";
+import { AlertCircle, RotateCcw, Loader2 } from "lucide-react";
 
 type AppState = "gate" | "loading" | "recap" | "live" | "error";
 
@@ -36,7 +36,7 @@ export const CatchUpFlow: React.FC = () => {
       const json = await res.json();
 
       if (!res.ok || !json.success) {
-        throw new Error(json.error?.message || "Failed to generate AI recap");
+        throw new Error(json.error?.message || "Failed to generate catch-up");
       }
 
       setRecapData(json.data);
@@ -44,7 +44,7 @@ export const CatchUpFlow: React.FC = () => {
     } catch (err: any) {
       console.error("Error generating catch up recap:", err);
       setErrorMessage(
-        err?.message || "Network issue connecting to AI service. Please try again."
+        err?.message || "Could not generate catch-up right now. Please retry."
       );
       setAppState("error");
     }
@@ -67,7 +67,7 @@ export const CatchUpFlow: React.FC = () => {
   };
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-rose-500 selection:text-white">
+    <main className="min-h-screen bg-[#0E1116] text-[#F0F6FC] flex flex-col font-sans selection:bg-[#E11D48] selection:text-white">
       {/* Screen 1: Spoiler Gate */}
       {appState === "gate" && (
         <SpoilerGate
@@ -80,23 +80,15 @@ export const CatchUpFlow: React.FC = () => {
 
       {/* Loading Overlay */}
       {appState === "loading" && (
-        <div className="w-full max-w-md mx-auto my-auto px-4 py-20 text-center animate-fadeIn">
-          <div className="w-14 h-14 mx-auto mb-6 relative">
-            <div className="w-14 h-14 rounded-full border-4 border-slate-800 border-t-rose-500 animate-spin" />
-            <Sparkles className="w-5 h-5 text-amber-300 absolute inset-0 m-auto animate-pulse" />
-          </div>
+        <div className="w-full max-w-sm mx-auto my-auto px-4 py-24 text-center">
+          <Loader2 className="w-8 h-8 mx-auto mb-4 text-[#E11D48] animate-spin" />
 
-          <h2 className="text-lg font-bold text-slate-100 mb-2">
-            Synthesizing Overs {fromOver + 1} to {toOver}
+          <h2 className="text-base font-semibold text-slate-100 mb-1">
+            Catching you up on overs {fromOver + 1} to {toOver}
           </h2>
-          <p className="text-xs text-slate-400 leading-relaxed mb-6">
-            Rhea AI is analyzing win probability swings, wickets, and key tactical moments with Groq llama-3.1...
+          <p className="text-xs text-slate-400">
+            Finding key moments and momentum shifts...
           </p>
-
-          <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-            <span>Zero Spoilers Enforced</span>
-          </div>
         </div>
       )}
 
@@ -125,31 +117,31 @@ export const CatchUpFlow: React.FC = () => {
 
       {/* Error Fallback Screen */}
       {appState === "error" && (
-        <div className="w-full max-w-md mx-auto my-auto px-4 py-16 text-center animate-fadeIn">
-          <div className="w-12 h-12 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center justify-center mx-auto mb-4">
-            <AlertCircle className="w-6 h-6" />
+        <div className="w-full max-w-sm mx-auto my-auto px-4 py-20 text-center">
+          <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mx-auto mb-3">
+            <AlertCircle className="w-5 h-5" />
           </div>
-          <h2 className="text-base font-bold text-slate-100 mb-2">
-            Couldn&apos;t Generate Catch-Up
+          <h2 className="text-sm font-semibold text-slate-100 mb-1">
+            Couldn&apos;t load catch-up
           </h2>
           <p className="text-xs text-slate-400 mb-6">
-            {errorMessage || "Something unexpected happened. You can retry or head directly into the live match."}
+            {errorMessage || "Please try again or skip directly to live."}
           </p>
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex items-center justify-center gap-2">
             <button
               type="button"
               onClick={() => handleStartCatchUp(fromOver, toOver)}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-lg bg-[#161B22] border border-[#262C36] text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Retry Recap</span>
+              <span>Retry</span>
             </button>
             <button
               type="button"
               onClick={handleJumpToLiveDirect}
-              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white shadow-lg"
+              className="px-3.5 py-2 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-xs font-semibold text-white transition-colors"
             >
-              <span>Skip to Live Score</span>
+              <span>Skip to live</span>
             </button>
           </div>
         </div>
