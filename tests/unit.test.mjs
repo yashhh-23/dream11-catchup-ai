@@ -11,6 +11,9 @@ import {
   getTopMomentsFallback,
   calculateLiveWinProbability,
   validateRecapAgainstBallData,
+  calculateFantasyPerformance,
+  computeThrillRating,
+  getWhatToWatchNext,
 } from "../lib/matchUtils.ts";
 import { buildRecapPrompt } from "../lib/promptBuilder.ts";
 
@@ -133,4 +136,29 @@ test("buildRecapPrompt generates valid prompt with compressed payload and pre-co
   assert.ok(prompt.includes("PRE-COMPUTED TURNING POINTS"), "Prompt must pass code-computed moments");
   assert.ok(prompt.includes(computedMoments[0].player), "Prompt must include ground truth player");
   assert.ok(prompt.includes("Target: 178"), "Prompt must provide match target");
+});
+
+test("Product Feature 1: calculateFantasyPerformance computes captain/VC points and rank movement", () => {
+  const missedBalls = sliceBalls(matchBalls, 5, 14.2);
+  const fantasy = calculateFantasyPerformance(missedBalls, "Hardik Pandya", "Rohit Sharma");
+
+  assert.strictEqual(fantasy.captain.name, "Hardik Pandya");
+  assert.ok(fantasy.captain.pointsEarned > 0, "Captain should earn points from boundaries and sixes");
+  assert.ok(fantasy.captain.summary.includes("Hardik Pandya") || fantasy.captain.summary.includes("Captain"));
+  assert.strictEqual(fantasy.viceCaptain.name, "Rohit Sharma");
+  assert.ok(typeof fantasy.rankBefore === "string" && typeof fantasy.rankAfter === "string");
+  assert.ok(fantasy.phasePoints > 0, "Phase points should be aggregated");
+});
+
+test("Product Features 3 & 4: computeThrillRating and getWhatToWatchNext produce valid forward context", () => {
+  const missedBalls = sliceBalls(matchBalls, 5, 14.2);
+  const thrill = computeThrillRating(missedBalls);
+  assert.ok(thrill.rating >= 7.5 && thrill.rating <= 10.0, "Thrill rating within scale");
+  assert.ok(thrill.verdict.length > 10, "Verdict should be descriptive");
+
+  const lastBall = missedBalls[missedBalls.length - 1];
+  const nextWatch = getWhatToWatchNext(lastBall, matchMeta);
+  assert.strictEqual(nextWatch.onStrike, "Hardik Pandya");
+  assert.ok(nextWatch.equation.includes("Need 54 runs from 34 balls"));
+  assert.ok(nextWatch.upcomingBowler.includes("Ferguson"));
 });

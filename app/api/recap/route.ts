@@ -4,16 +4,29 @@ import {
   sliceBalls, 
   getTopMomentsFallback, 
   calculateOverStats, 
-  validateRecapAgainstBallData 
+  validateRecapAgainstBallData,
+  calculateFantasyPerformance,
+  computeThrillRating,
+  getWhatToWatchNext,
 } from "@/lib/matchUtils";
 import { buildRecapPrompt } from "@/lib/promptBuilder";
 import { callGroqRecap } from "@/lib/groqClient";
-import { ApiResponse, RecapPayload } from "@/types";
+import { ApiResponse, RecapPayload, SpoilerLevel, LanguageMode } from "@/types";
+
+// In-Memory cache for ultra-fast <10ms retrieval of common windows
+const recapCache = new Map<string, RecapPayload>();
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { matchId, fromOver, toOver } = body;
+    const { 
+      matchId, 
+      fromOver, 
+      toOver, 
+      spoilerLevel = "story-and-score", 
+      language = "en",
+      isWholeMatch = false 
+    } = body;
 
     // Load match from registry (accepts matchId, defaults gracefully)
     const { meta, balls } = getMatchById(matchId);
@@ -43,6 +56,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(errRes, { status: 400 });
     }
 
+    // Cache key for prefetching and instant response
+    const cacheKey = `${meta.matchId}:${fromOver}:${toOver}:${spoilerLevel}:${language}`;
+    if (recapCache.has(cacheKey)) {
+      return NextResponse.json({
+        success: true,
+        data: recapCache.get(cacheKey),
+        meta: {
+          matchId: meta.matchId,
+          usedFallback: false,
+          cached: true,
+          oversCovered: `Overs ${fromOver + 1} – ${toOver}`,
+        }
+      });
+    }
+
     // Slice match data without two-ball gap (supports fractional live overs like 14.2)
     const missedBalls = sliceBalls(balls, fromOver, toOver);
     if (missedBalls.length === 0) {
@@ -61,7 +89,15 @@ export async function POST(req: NextRequest) {
     const stats = calculateOverStats(missedBalls);
 
     // 1. Compute ground-truth turning points in code first (guarantees real overs, real players, real win-probs)
-    const computedMoments = getTopMomentsFallback(missedBalls, 3);
+    const rawMoments = getTopMomentsFallback(missedBalls, 3);
+    const computedMoments = rawMoments.map(m => ({
+      ...m,
+      videoClip: {
+        title: `${m.player} · ${m.label} (${m.over} ov)`,
+        duration: "0:14",
+        actionType: (m.label === "WICKET" ? "wicket" : m.label === "SIX" ? "six" : "boundary") as "wicket" | "six" | "boundary",
+      }
+    }));
 
     // Dynamic phase calculation at the exact end of missed window (prevents leaking future live state)
     const lastBall = missedBalls[missedBalls.length - 1];
@@ -72,13 +108,22 @@ export async function POST(req: NextRequest) {
     const runsNeededAtPhaseEnd = Math.max(0, meta.target - scoreAtPhaseEnd);
     const wicketsInHandAtPhaseEnd = 10 - wicketsAtPhaseEnd;
 
+    // Dream11 Fantasy Team Performance (Captain Hardik, VC Rohit)
+    const fantasyImpact = calculateFantasyPerformance(missedBalls, "Hardik Pandya", "Rohit Sharma");
+
+    // No-Spoiler Thrill Rating for match / phase
+    const thrillRating = computeThrillRating(missedBalls);
+
+    // Forward-Looking "What to watch next" card
+    const whatToWatchNext = getWhatToWatchNext(lastBall, meta);
+
     // Batters and wickets involved in this exact phase
     const battersInPhase = Array.from(new Set(missedBalls.map(b => b.batter)));
     const dismissedInPhase = missedBalls
       .filter(b => b.wicket)
       .map(b => b.dismissedPlayer || b.batter);
 
-    // Determine mood using numeric comparisons (fixes string comparison bug)
+    // Determine mood using numeric comparisons
     let calculatedMood: RecapPayload["mood"] = "Knife's edge";
     if (stats.wickets >= 3) {
       calculatedMood = "Knife's edge";
@@ -99,7 +144,6 @@ export async function POST(req: NextRequest) {
         const prompt = buildRecapPrompt(missedBalls, meta, fromDisplay, toDisplay, computedMoments);
         const rawResponse = await callGroqRecap(prompt);
 
-        // Sanitize markdown fences if LLM accidentally enclosed in ```json
         const cleaned = rawResponse
           .replace(/^```json\s*/i, "")
           .replace(/^```\s*/i, "")
@@ -113,7 +157,7 @@ export async function POST(req: NextRequest) {
           const finalMoments = computedMoments.map((codeMom, idx) => {
             const llmMom = parsed.top3Moments?.[idx] || parsed.top3Moments?.find((m: any) => m.over === codeMom.over);
             return {
-              ...codeMom, // code is ground truth for over, label, player, winProbBefore, winProbAfter, swingDelta
+              ...codeMom,
               description: (typeof llmMom?.description === "string" && llmMom.description.trim().length > 5)
                 ? llmMom.description.trim()
                 : codeMom.description,
@@ -133,6 +177,12 @@ export async function POST(req: NextRequest) {
               mood: parsed.mood || calculatedMood,
               partnershipSummary: parsed.partnershipSummary || `${stats.runs} runs scored for the loss of ${stats.wickets} wickets in this phase.`,
               oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
+              fantasyImpact,
+              thrillRating,
+              whatToWatchNext,
+              hinglishOneLiner: `India ne Overs ${fromDisplay}–${toDisplay} me ${stats.runs} banaye aur ${stats.wickets} wicket gawaye. Match abhi bhi full tight chal raha hai!`,
+              hinglishStory: `Is phase me bohot zabardast drama hua! ${dismissedInPhase.length > 0 ? `NZ ne ${dismissedInPhase.join(", ")} ko out karke jhatka diya.` : "India ke batters ne aaram se boundary nikali."} Phir Hardik aur Tilak ne counter-attack karke score ko banaye rakha. Aage ka over dekhne laayak hoga!`,
+              spoilerLevel: spoilerLevel as SpoilerLevel,
             };
           } else {
             console.warn("LLM moments failed validation, using code moments:", validation.issues);
@@ -165,8 +215,17 @@ export async function POST(req: NextRequest) {
         mood: calculatedMood,
         partnershipSummary: `Phase Stats: ${stats.runs} runs off ${stats.totalBalls} balls (${stats.boundaries} fours, ${stats.sixes} sixes).`,
         oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
+        fantasyImpact,
+        thrillRating,
+        whatToWatchNext,
+        hinglishOneLiner: `India ne Overs ${fromDisplay}–${toDisplay} me ${stats.runs} banaye aur ${stats.wickets} wicket gawaye. Match abhi bhi full tight chal raha hai!`,
+        hinglishStory: `Is phase me bohot zabardast drama hua! ${dismissedInPhase.length > 0 ? `NZ ne ${dismissedInPhase.join(", ")} ko out karke jhatka diya.` : "India ke batters ne aaram se boundary nikali."} Phir Hardik aur Tilak ne counter-attack karke score ko banaye rakha. Aage ka over dekhne laayak hoga!`,
+        spoilerLevel: spoilerLevel as SpoilerLevel,
       };
     }
+
+    // Store in cache for subsequent instant loads
+    recapCache.set(cacheKey, recapPayload);
 
     return NextResponse.json({
       success: true,

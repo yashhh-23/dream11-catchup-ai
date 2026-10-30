@@ -10,6 +10,7 @@ import {
   Pause,
   RotateCcw,
   SkipForward,
+  Trophy,
 } from "lucide-react";
 
 interface LiveViewProps {
@@ -101,14 +102,21 @@ export const LiveView: React.FC<LiveViewProps> = ({
           <span>Match center</span>
         </button>
 
-        <button
-          type="button"
-          onClick={onBackToRecap}
-          className="text-xs px-2.5 py-1 rounded-lg bg-[#0E1116] border border-[#262C36] text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
-        >
-          <Sparkles className="w-3 h-3 text-[#E11D48]" />
-          <span>Recap</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/25 px-2 py-0.5 rounded flex items-center gap-1 font-medium">
+            <Trophy className="w-3 h-3 text-amber-400" />
+            <span>IndiaXI · 482 pts</span>
+          </span>
+
+          <button
+            type="button"
+            onClick={onBackToRecap}
+            className="text-xs px-2.5 py-1 rounded-lg bg-[#0E1116] border border-[#262C36] text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
+          >
+            <Sparkles className="w-3 h-3 text-[#E11D48]" />
+            <span>Recap</span>
+          </button>
+        </div>
       </header>
 
       {/* Main Single Flattened Container */}

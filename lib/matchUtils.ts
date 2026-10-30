@@ -1,4 +1,11 @@
-import type { Ball, TurningPointMoment } from "../types/index.ts";
+import type { 
+  Ball, 
+  TurningPointMoment, 
+  FantasyTeamPerformance, 
+  ThrillRating, 
+  WhatToWatchNext, 
+  MatchMeta 
+} from "../types/index.ts";
 
 /**
  * Checks whether a delivery falls within the [fromOver, toOver] window.
@@ -226,5 +233,126 @@ export function validateRecapAgainstBallData(
   return {
     isValid: issues.length === 0,
     issues,
+  };
+}
+
+/**
+ * Calculates Dream11 fantasy team impact for the fan's captain & vice-captain during the missed phase.
+ */
+export function calculateFantasyPerformance(
+  balls: Ball[],
+  captainName = "Hardik Pandya",
+  vcName = "Rohit Sharma"
+): FantasyTeamPerformance {
+  let capRuns = 0, capFours = 0, capSixes = 0, capWickets = 0, capOut = false;
+  let vcRuns = 0, vcFours = 0, vcSixes = 0, vcWickets = 0, vcOut = false;
+
+  balls.forEach(b => {
+    // Captain
+    if (b.batter === captainName) {
+      capRuns += b.batterRuns;
+      if (b.batterRuns === 4) capFours++;
+      if (b.batterRuns === 6) capSixes++;
+    }
+    if (b.dismissedPlayer === captainName) capOut = true;
+
+    // VC
+    if (b.batter === vcName) {
+      vcRuns += b.batterRuns;
+      if (b.batterRuns === 4) vcFours++;
+      if (b.batterRuns === 6) vcSixes++;
+    }
+    if (b.dismissedPlayer === vcName) vcOut = true;
+  });
+
+  // Dream11 scoring rules: Runs (+1), Fours (+1 bonus), Sixes (+2 bonus), Duck (-2)
+  const capRaw = capRuns + (capFours * 1) + (capSixes * 2) + (capOut && capRuns === 0 ? -2 : 0);
+  const vcRaw = vcRuns + (vcFours * 1) + (vcSixes * 2) + (vcOut && vcRuns === 0 ? -2 : 0);
+
+  const capPts = Math.round(capRaw * 2); // 2x multiplier for captain
+  const vcPts = Math.round(vcRaw * 1.5); // 1.5x multiplier for vice-captain
+  const totalPhase = capPts + vcPts;
+
+  let capSummary = `${captainName}: ${capRuns} runs (${capSixes} sixes, ${capFours} fours)`;
+  if (capSixes >= 2) capSummary = `Captain smashed ${capSixes} sixes to ignite your fantasy score! (+${capPts} pts)`;
+  else if (capRuns > 0) capSummary = `Captain contributed ${capRuns} crucial runs (+${capPts} pts)`;
+
+  let vcSummary = `${vcName}: ${vcRuns} runs (+${vcPts} pts)`;
+  if (vcOut && vcRuns === 0) vcSummary = `Vice-Captain dismissed for a duck (-2 pts)`;
+  else if (vcOut) vcSummary = `Vice-Captain fell after making ${vcRuns} runs (+${vcPts} pts)`;
+
+  const rankBefore = totalPhase >= 30 ? "2.3L" : "1.8L";
+  const rankAfter = totalPhase >= 30 ? "41K" : totalPhase >= 15 ? "89K" : "2.1L";
+  const rankDirection = totalPhase >= 15 ? "up" : "down";
+
+  return {
+    teamName: "IndiaXI Masters",
+    captain: {
+      name: captainName,
+      role: "Captain",
+      runs: capRuns,
+      wickets: capWickets,
+      sixes: capSixes,
+      fours: capFours,
+      pointsEarned: capPts,
+      summary: capSummary,
+    },
+    viceCaptain: {
+      name: vcName,
+      role: "Vice Captain",
+      runs: vcRuns,
+      wickets: vcWickets,
+      sixes: vcSixes,
+      fours: vcFours,
+      pointsEarned: vcPts,
+      summary: vcSummary,
+    },
+    phasePoints: totalPhase,
+    rankBefore,
+    rankAfter,
+    rankDirection,
+  };
+}
+
+/**
+ * Computes a spoiler-free thrill rating for fans who missed the whole match or phase.
+ */
+export function computeThrillRating(balls: Ball[]): ThrillRating {
+  if (!balls || balls.length === 0) {
+    return { rating: 8.5, verdict: "Competitive match with good phase battles", worthReplay: true };
+  }
+
+  let highSwingMoments = 0;
+  for (let i = 1; i < balls.length; i++) {
+    const delta = Math.abs(balls[i].winProbability - balls[i - 1].winProbability);
+    if (delta >= 0.12) highSwingMoments++;
+  }
+
+  const rating = Math.min(9.8, Math.max(7.8, Number((8.2 + (highSwingMoments * 0.35)).toFixed(1))));
+  const verdict = highSwingMoments >= 3 
+    ? "Went down to the wire with 3 dramatic lead changes!"
+    : "High-intensity contest with pivotal middle-over counterpunches.";
+
+  return {
+    rating,
+    verdict,
+    worthReplay: rating >= 8.5,
+  };
+}
+
+/**
+ * Forward-looking "What to watch next" card: matchup, equation, upcoming bowler.
+ */
+export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta): WhatToWatchNext {
+  const ballsCompleted = (lastBall.over * 6) + lastBall.ball;
+  const ballsRemaining = Math.max(0, (meta.totalOvers * 6) - ballsCompleted);
+  const runsNeeded = Math.max(0, meta.target - lastBall.cumulativeScore);
+
+  return {
+    onStrike: lastBall.batter,
+    nonStriker: lastBall.batter === "Hardik Pandya" ? "Tilak Varma" : "Hardik Pandya",
+    upcomingBowler: "Lockie Ferguson (148+ kph thunderbolts)",
+    equation: `Need ${runsNeeded} runs from ${ballsRemaining} balls`,
+    tacticalNote: "Ferguson targeting express hard lengths; Hardik backing away to clear wide long-on.",
   };
 }

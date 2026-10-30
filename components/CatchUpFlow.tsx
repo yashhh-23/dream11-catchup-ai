@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { matchBalls, matchMeta } from "@/lib/matchData";
-import { RecapPayload } from "@/types";
+import { RecapPayload, SpoilerLevel } from "@/types";
 import { SpoilerGate } from "@/components/screens/SpoilerGate";
 import { RecapScreen } from "@/components/screens/RecapScreen";
 import { LiveView } from "@/components/screens/LiveView";
@@ -17,7 +17,12 @@ export const CatchUpFlow: React.FC = () => {
   const [recapData, setRecapData] = useState<RecapPayload | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleStartCatchUp = async (selectedFrom: number, selectedTo: number) => {
+  const handleStartCatchUp = async (
+    selectedFrom: number, 
+    selectedTo: number, 
+    spoilerLevel?: SpoilerLevel,
+    isWholeMatch?: boolean
+  ) => {
     setFromOver(selectedFrom);
     setToOver(selectedTo);
     setAppState("loading");
@@ -31,6 +36,8 @@ export const CatchUpFlow: React.FC = () => {
           matchId: matchMeta.matchId,
           fromOver: selectedFrom,
           toOver: selectedTo,
+          spoilerLevel: spoilerLevel || "story-and-score",
+          isWholeMatch: !!isWholeMatch,
         }),
       });
 
