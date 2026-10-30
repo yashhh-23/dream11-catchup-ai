@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { Ball, TurningPointMoment } from "@/types";
+import { isBallInRange } from "@/lib/matchUtils";
 import { X } from "lucide-react";
 
 interface WinProbChartProps {
@@ -57,10 +58,16 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
   const pathD = `M ${points.join(" L ")}`;
   const areaD = `${pathD} L ${getX(totalBalls - 1).toFixed(1)},${padTop + chartH} L ${padLeft},${padTop + chartH} Z`;
 
-  // Find index bounds for the missed window
-  const startIdx = Math.max(0, balls.findIndex(b => b.over >= missedFromOver));
-  const endIdx = balls.findIndex(b => b.over >= missedToOver);
-  const safeEndIdx = endIdx === -1 ? totalBalls - 1 : endIdx;
+  // Find index bounds for the missed window (supports fractional over cutoffs like 14.2)
+  const startIdx = Math.max(0, balls.findIndex(b => isBallInRange(b, missedFromOver, missedToOver)));
+  let lastMatchingIdx = -1;
+  for (let i = balls.length - 1; i >= 0; i--) {
+    if (isBallInRange(balls[i], missedFromOver, missedToOver)) {
+      lastMatchingIdx = i;
+      break;
+    }
+  }
+  const safeEndIdx = lastMatchingIdx === -1 ? totalBalls - 1 : lastMatchingIdx;
 
   const windowX1 = getX(startIdx);
   const windowX2 = getX(safeEndIdx);

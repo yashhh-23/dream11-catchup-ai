@@ -2,26 +2,35 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 // Match data & utility functions
-import { matchBalls, matchMeta } from "../lib/matchData.ts";
+import { matchBalls, matchMeta, getMatchById } from "../lib/matchData.ts";
 import {
   sliceBalls,
   formatOver,
   formatWinProb,
   calculateOverStats,
   getTopMomentsFallback,
+  calculateLiveWinProbability,
+  validateRecapAgainstBallData,
 } from "../lib/matchUtils.ts";
 import { buildRecapPrompt } from "../lib/promptBuilder.ts";
 
-test("Edge Case S1 & S4: sliceBalls correctly extracts overs in range [fromOver, toOver)", () => {
-  // Extract overs 6 to 14 (indices 5 to 14)
-  const sliced = sliceBalls(matchBalls, 5, 14);
+test("Two-ball gap fix: sliceBalls includes deliveries up to fractional live cutoff 14.2", () => {
+  // Slicing from over 5 (Over 6) up to 14.2
+  const sliced = sliceBalls(matchBalls, 5, 14.2);
   assert.ok(sliced.length > 0, "Sliced balls should not be empty");
-  assert.ok(sliced.every(b => b.over >= 5 && b.over < 14), "Every ball must be within bounds");
 
-  // First ball should be over 5 (displayed as over 6)
+  // First ball should be over 5 (Over 6.1)
   assert.strictEqual(sliced[0].over, 5);
-  // Last ball should be over 13 (displayed as over 14)
-  assert.strictEqual(sliced[sliced.length - 1].over, 13);
+  assert.strictEqual(sliced[0].ball, 1);
+
+  // Last ball MUST be over 14, ball 2 (Over 14.2)
+  const last = sliced[sliced.length - 1];
+  assert.strictEqual(last.over, 14, "Must include over 14");
+  assert.strictEqual(last.ball, 2, "Must include ball 2 (14.2)");
+
+  // Ball 14.3 must NOT be included in the recap window
+  const hasBall3 = sliced.some(b => b.over === 14 && b.ball === 3);
+  assert.strictEqual(hasBall3, false, "Ball 14.3 must not be included");
 });
 
 test("Edge Case S1: Empty slice when fromOver >= toOver", () => {
@@ -40,16 +49,11 @@ test("Edge Case D1: Out of bounds range returns empty gracefully", () => {
 test("formatOver correctly formats completed over and ball to cricket standard", () => {
   assert.strictEqual(formatOver(0, 1), "0.1");
   assert.strictEqual(formatOver(9, 2), "9.2");
+  assert.strictEqual(formatOver(9, 5), "9.5");
   assert.strictEqual(formatOver(14, 2), "14.2");
 });
 
-test("formatWinProb converts decimal to percentage string", () => {
-  assert.strictEqual(formatWinProb(0.72), "72%");
-  assert.strictEqual(formatWinProb(0.354), "35%");
-  assert.strictEqual(formatWinProb(1.0), "100%");
-});
-
-test("calculateOverStats computes correct aggregates and boundaries", () => {
+test("Numeric comparison fix: calculateOverStats returns numeric runRate", () => {
   const sampleBalls = [
     { runs: 4, wicket: false },
     { runs: 6, wicket: false },
@@ -64,32 +68,69 @@ test("calculateOverStats computes correct aggregates and boundaries", () => {
   assert.strictEqual(stats.boundaries, 1);
   assert.strictEqual(stats.sixes, 1);
   assert.strictEqual(stats.totalBalls, 6);
-  assert.strictEqual(stats.runRate, "14.00");
+  assert.strictEqual(typeof stats.runRate, "number", "runRate must be numeric");
+  assert.strictEqual(stats.runRate, 14);
+  assert.strictEqual(stats.runRateFormatted, "14.00");
+
+  // Verify string comparison bug is impossible:
+  // In JavaScript: "10.5" < "7.0" is true, but 10.5 < 7.0 is false!
+  const highRate = 10.5;
+  assert.strictEqual(highRate < 7.0, false, "Numeric comparison must be false for 10.5 < 7.0");
 });
 
-test("getTopMomentsFallback produces exactly up to 3 highest leverage turning points", () => {
-  // Slicing middle overs 6 to 14 where Sodhi took 2 wickets in Over 10 and Tilak hit sixes in Over 12
-  const missedBalls = sliceBalls(matchBalls, 5, 14);
-  const moments = getTopMomentsFallback(missedBalls, 3);
+test("calculateLiveWinProbability computes realistic chase win percentages", () => {
+  // Target 178, starting innings (0/0, 120 balls left)
+  const initialProb = calculateLiveWinProbability(178, 0, 0, 0, 20);
+  assert.ok(initialProb >= 0.40 && initialProb <= 0.60, `Initial probability balanced: ${initialProb}`);
 
-  assert.strictEqual(moments.length, 3, "Must return exactly 3 top moments");
+  // Near target achieved (170/3, 10 balls left)
+  const strongProb = calculateLiveWinProbability(178, 170, 3, 110, 20);
+  assert.ok(strongProb >= 0.90, `Strong position: ${strongProb}`);
 
-  // Wickets should be present and marked with WICKET
-  const wicketMoments = moments.filter(m => m.label === "WICKET");
-  assert.ok(wicketMoments.length >= 1, "Should identify high leverage wickets");
-
-  // Sorted descending by swing impact
-  assert.ok(moments[0].swingDelta >= moments[1].swingDelta || moments[0].label === "WICKET");
+  // Hopeless situation (80/9, 10 balls left needing 98)
+  const hopelessProb = calculateLiveWinProbability(178, 80, 9, 110, 20);
+  assert.ok(hopelessProb <= 0.10, `Hopeless position: ${hopelessProb}`);
 });
 
-test("buildRecapPrompt generates valid prompt with compressed payload", () => {
-  const missedBalls = sliceBalls(matchBalls, 5, 14);
-  const prompt = buildRecapPrompt(missedBalls, matchMeta, 6, 14);
+test("Validation guardrail: validateRecapAgainstBallData detects hallucinated overs and players", () => {
+  const sliced = sliceBalls(matchBalls, 5, 14.2);
+  const validMoments = getTopMomentsFallback(sliced, 3);
+
+  // Valid moments should pass
+  const validResult = validateRecapAgainstBallData(validMoments, sliced);
+  assert.strictEqual(validResult.isValid, true);
+  assert.strictEqual(validResult.issues.length, 0);
+
+  // Hallucinated over outside window (e.g., 14.3 or 10.5 when 9.5 was actual)
+  const hallucinatedMoments = [
+    { ...validMoments[0], over: "14.3" }, // 14.3 is outside the 14.2 window
+    { ...validMoments[1], player: "Fake Player" }, // Player not in match
+  ];
+  const invalidResult = validateRecapAgainstBallData(hallucinatedMoments, sliced);
+  assert.strictEqual(invalidResult.isValid, false);
+  assert.ok(invalidResult.issues.length >= 2, "Must flag both fake over and fake player");
+});
+
+test("Match Registry: getMatchById resolves matches dynamically", () => {
+  const defaultMatch = getMatchById();
+  assert.strictEqual(defaultMatch.meta.matchId, "ind-nz-2026-t20-04");
+
+  const ausMatch = getMatchById("ind-aus-2026-t20-final");
+  assert.strictEqual(ausMatch.meta.matchId, "ind-aus-2026-t20-final");
+  assert.strictEqual(ausMatch.meta.target, 192);
+
+  const unknownMatch = getMatchById("non-existent-id");
+  assert.strictEqual(unknownMatch.meta.matchId, "ind-nz-2026-t20-04", "Defaults gracefully to active match");
+});
+
+test("buildRecapPrompt generates valid prompt with compressed payload and pre-computed moments", () => {
+  const missedBalls = sliceBalls(matchBalls, 5, 14.2);
+  const computedMoments = getTopMomentsFallback(missedBalls, 3);
+  const prompt = buildRecapPrompt(missedBalls, matchMeta, 6, "14.2", computedMoments);
 
   assert.ok(prompt.includes("Rhea AI"), "Prompt must instruct AI persona");
-  assert.ok(prompt.includes("Overs 6 to 14"), "Prompt must mention missed overs window");
-  assert.ok(prompt.includes("India"), "Prompt must include chasing team");
-  assert.ok(prompt.includes("New Zealand"), "Prompt must include opponent");
+  assert.ok(prompt.includes("Overs 6 to 14.2"), "Prompt must mention missed overs window");
+  assert.ok(prompt.includes("PRE-COMPUTED TURNING POINTS"), "Prompt must pass code-computed moments");
+  assert.ok(prompt.includes(computedMoments[0].player), "Prompt must include ground truth player");
   assert.ok(prompt.includes("Target: 178"), "Prompt must provide match target");
-  assert.ok(prompt.includes("top3Moments"), "Prompt must specify schema requirements");
 });

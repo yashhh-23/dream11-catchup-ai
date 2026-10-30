@@ -1,5 +1,10 @@
 import Groq from "groq-sdk";
 
+export const GROQ_MODELS = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+] as const;
+
 export async function callGroqRecap(prompt: string, maxRetries = 2): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
@@ -7,17 +12,11 @@ export async function callGroqRecap(prompt: string, maxRetries = 2): Promise<str
   }
 
   const groq = new Groq({ apiKey });
-
-  // Active production models on Groq
-  const models = [
-    "qwen/qwen3.8-27b",
-    "openai/gpt-oss-120b",
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-  ];
-  let chosenModel = models[0];
+  let modelIndex = 0;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const chosenModel = GROQ_MODELS[modelIndex];
+
     try {
       const completion = await groq.chat.completions.create({
         model: chosenModel,
@@ -31,7 +30,7 @@ export async function callGroqRecap(prompt: string, maxRetries = 2): Promise<str
             content: prompt,
           },
         ],
-        temperature: 0.6,
+        temperature: 0.5,
         max_tokens: 700,
         response_format: { type: "json_object" },
       });
@@ -43,19 +42,17 @@ export async function callGroqRecap(prompt: string, maxRetries = 2): Promise<str
 
       return responseText.trim();
     } catch (error: any) {
-      console.warn(`Groq API attempt ${attempt + 1} failed:`, error?.message || error);
+      console.warn(`Groq API attempt ${attempt + 1} with model ${chosenModel} failed:`, error?.message || error);
 
-      // If model not found or decommissioned, try fallback model
-      if (error?.status === 404 || error?.message?.includes("model")) {
-        chosenModel = models[2]; // try llama-3.1-8b-instant
-      }
+      // Walk sequentially to the next model in the pool
+      modelIndex = (modelIndex + 1) % GROQ_MODELS.length;
 
       if (attempt === maxRetries) {
         throw error;
       }
 
-      // Exponential backoff delay (400ms, 800ms)
-      const delayMs = 400 * Math.pow(2, attempt);
+      // Exponential backoff delay (300ms, 600ms)
+      const delayMs = 300 * Math.pow(2, attempt);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }

@@ -168,3 +168,34 @@ export const matchBalls: Ball[] = [
   { over: 18, ball: 3, batter: "Tilak Varma", bowler: "Lockie Ferguson", runs: 1, batterRuns: 1, extras: 0, wicket: false, commentary: "Single to third man.", winProbability: 0.99, cumulativeScore: 172, cumulativeWickets: 4 },
   { over: 18, ball: 4, batter: "Rinku Singh", bowler: "Lockie Ferguson", runs: 6, batterRuns: 6, extras: 0, wicket: false, commentary: "SIX! RINKU FINISHES IT IN STYLE! A towering blow over long-on to seal the match for India!", winProbability: 1.0, cumulativeScore: 178, cumulativeWickets: 4 }
 ];
+
+export const matchesRegistry: Record<string, { meta: MatchMeta; balls: Ball[] }> = {
+  [matchMeta.matchId]: {
+    meta: matchMeta,
+    balls: matchBalls,
+  },
+  "ind-aus-2026-t20-final": {
+    meta: {
+      matchId: "ind-aus-2026-t20-final",
+      title: "India vs Australia, T20 World Final",
+      team1: "Australia",
+      team2: "India",
+      venue: "Melbourne Cricket Ground",
+      matchDate: "November 15, 2026",
+      format: "T20",
+      totalOvers: 20,
+      target: 192,
+      currentLiveOver: 15.1,
+      innings: 2,
+    },
+    balls: matchBalls, // shares realistic ball schema
+  },
+};
+
+export function getMatchById(matchId?: string): { meta: MatchMeta; balls: Ball[] } {
+  if (matchId && matchesRegistry[matchId]) {
+    return matchesRegistry[matchId];
+  }
+  return { meta: matchMeta, balls: matchBalls };
+}
+

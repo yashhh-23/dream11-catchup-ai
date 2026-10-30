@@ -18,21 +18,20 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   isLoading,
 }) => {
   // Live point is Over 14.2 (14 completed overs, 2 balls into over 15)
-  const liveOverIndex = Math.floor(meta.currentLiveOver); // 14
-  const liveDisplayOver = 14; // Overs 1 to 14 completed
+  const liveTargetOver = meta.currentLiveOver; // 14.2
 
   // Presets: start over (1-based display number)
   const [selectedStartOver, setSelectedStartOver] = useState<number>(6);
   const [showCustomSlider, setShowCustomSlider] = useState<boolean>(false);
 
-  const missedOversCount = Math.max(1, liveDisplayOver - selectedStartOver + 1);
+  const missedOversCount = Math.max(1, Math.floor(liveTargetOver) - selectedStartOver + 1);
   const readTimeEstimate = missedOversCount <= 5 ? "about 30 sec" : missedOversCount <= 10 ? "about 45 sec" : "about 1 min";
 
   const handleStartCatchUp = () => {
     if (isLoading) return;
     const fromIndex = Math.max(0, selectedStartOver - 1);
-    const toIndex = liveOverIndex; // up to over index 14 (Over 14)
-    onCatchUp(fromIndex, toIndex);
+    // Slice right up to current live delivery (14.2) to eliminate the two-ball gap
+    onCatchUp(fromIndex, liveTargetOver);
   };
 
   return (
@@ -171,7 +170,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
                 <input
                   type="range"
                   min={1}
-                  max={liveDisplayOver}
+                  max={Math.floor(liveTargetOver)}
                   step={1}
                   value={selectedStartOver}
                   onChange={(e) => setSelectedStartOver(parseInt(e.target.value, 10))}
@@ -179,7 +178,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
                 />
                 <div className="flex justify-between text-[10px] text-slate-400">
                   <span>Over 1</span>
-                  <span>Over 14</span>
+                  <span>Over {Math.floor(liveTargetOver)}</span>
                 </div>
               </div>
             )}
@@ -206,7 +205,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             </>
           ) : (
             <>
-              <span>Catch me up (Overs {selectedStartOver}–{liveDisplayOver})</span>
+              <span>Catch me up (Overs {selectedStartOver}–{liveTargetOver})</span>
               <ArrowRight className="w-4 h-4" />
             </>
           )}

@@ -13,7 +13,7 @@ type AppState = "gate" | "loading" | "recap" | "live" | "error";
 export const CatchUpFlow: React.FC = () => {
   const [appState, setAppState] = useState<AppState>("gate");
   const [fromOver, setFromOver] = useState<number>(5); // default over index 5 (Over 6)
-  const [toOver, setToOver] = useState<number>(14);     // default over index 14 (Over 14)
+  const [toOver, setToOver] = useState<number>(14.2);  // default live cutoff 14.2 (Zero two-ball gap)
   const [recapData, setRecapData] = useState<RecapPayload | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -28,6 +28,7 @@ export const CatchUpFlow: React.FC = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          matchId: matchMeta.matchId,
           fromOver: selectedFrom,
           toOver: selectedTo,
         }),
