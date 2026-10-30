@@ -8,8 +8,13 @@ export async function callGroqRecap(prompt: string, maxRetries = 2): Promise<str
 
   const groq = new Groq({ apiKey });
 
-  // Preferred fast production models on Groq
-  const models = ["llama-3.1-70b-versatile", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  // Active production models on Groq
+  const models = [
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+  ];
   let chosenModel = models[0];
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
