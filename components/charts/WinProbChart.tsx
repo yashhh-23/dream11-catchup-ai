@@ -1,15 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { Ball, TurningPointMoment } from "@/types";
-import { isBallInRange } from "@/lib/matchUtils";
+import { Ball } from "@/types";
+import { isBallInRange, EVENT_STYLE, classifyBall } from "@/lib/matchUtils";
 import { X } from "lucide-react";
 
 interface WinProbChartProps {
   balls: Ball[];
   missedFromOver: number;
   missedToOver: number;
-  topMoments: TurningPointMoment[];
 }
 
 interface PointDetails {
@@ -33,32 +32,27 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
   missedFromOver,
   missedToOver,
 }) => {
-  const [hoveredPoint, setHoveredPoint] = useState<PointDetails | null>(null);
   const [pinnedPoint, setPinnedPoint] = useState<PointDetails | null>(null);
+  const [hoveredPoint, setHoveredPoint] = useState<PointDetails | null>(null);
 
-  if (!balls || balls.length === 0) return null;
-
-  // Chart coordinate constants
-  const width = 640;
+  const width = 600;
   const height = 180;
   const padLeft = 40;
-  const padRight = 16;
-  const padTop = 16;
-  const padBottom = 24;
+  const padRight = 20;
+  const padTop = 15;
+  const padBottom = 25;
+
   const chartW = width - padLeft - padRight;
   const chartH = height - padTop - padBottom;
 
   const totalBalls = balls.length;
 
-  const getX = (idx: number) => padLeft + (idx / Math.max(totalBalls - 1, 1)) * chartW;
-  const getY = (prob: number) => padTop + (1 - prob) * chartH;
+  const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
+  const getY = (prob: number) => padTop + chartH - prob * chartH;
 
-  // Build SVG path
   const points = balls.map((b, i) => `${getX(i).toFixed(1)},${getY(b.winProbability).toFixed(1)}`);
   const pathD = `M ${points.join(" L ")}`;
-  const areaD = `${pathD} L ${getX(totalBalls - 1).toFixed(1)},${padTop + chartH} L ${padLeft},${padTop + chartH} Z`;
 
-  // Find index bounds for the missed window (supports fractional over cutoffs like 14.2)
   const startIdx = Math.max(0, balls.findIndex(b => isBallInRange(b, missedFromOver, missedToOver)));
   let lastMatchingIdx = -1;
   for (let i = balls.length - 1; i >= 0; i--) {
@@ -111,7 +105,7 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
       </div>
 
       {/* SVG Graph Canvas */}
-      <div className="w-full overflow-hidden rounded-lg bg-[#0E1116] border border-[#262C36] p-1">
+      <div className="w-full overflow-hidden rounded-container bg-brand-bg border border-brand-border p-1">
         <svg
           viewBox={`0 0 ${width} ${height}`}
           className="w-full h-auto overflow-visible select-none"
@@ -137,114 +131,90 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
               height={chartH}
               fill="url(#windowFill)"
               stroke="#f59e0b"
-              strokeWidth="1"
               strokeDasharray="3 3"
-              opacity="0.6"
+              strokeWidth={1}
+              strokeOpacity={0.4}
             />
           )}
 
-          {/* Grid lines */}
-          {[0.25, 0.5, 0.75].map((lvl) => {
-            const y = getY(lvl);
-            const isMid = lvl === 0.5;
+          {/* Horizontal Grid lines */}
+          {[0.25, 0.5, 0.75].map((level) => {
+            const y = getY(level);
             return (
-              <g key={lvl}>
+              <g key={level}>
                 <line
                   x1={padLeft}
                   y1={y}
-                  x2={width - padRight}
+                  x2={padLeft + chartW}
                   y2={y}
-                  stroke={isMid ? "#334155" : "#1F2937"}
-                  strokeDasharray={isMid ? "4 4" : "2 2"}
-                  strokeWidth="1"
+                  stroke="#262C36"
+                  strokeDasharray="2 2"
                 />
                 <text
                   x={padLeft - 6}
-                  y={y + 3.5}
-                  fontSize="9"
-                  fill="#64748B"
+                  y={y + 3}
+                  fontSize={9}
+                  fill="#64748b"
                   textAnchor="end"
-                  className="tabular-nums"
+                  className="font-mono tabular-nums"
                 >
-                  {Math.round(lvl * 100)}%
+                  {`${Math.round(level * 100)}%`}
                 </text>
               </g>
             );
           })}
 
-          {/* X Baseline */}
-          <line
-            x1={padLeft}
-            y1={padTop + chartH}
-            x2={width - padRight}
-            y2={padTop + chartH}
-            stroke="#262C36"
-            strokeWidth="1"
-          />
-
-          {/* Over Markers */}
-          {[0, 4, 9, 14, 19].map((ovr) => {
-            const ballIdx = balls.findIndex(b => b.over === ovr);
-            if (ballIdx === -1) return null;
-            const x = getX(ballIdx);
+          {/* X Axis ticks */}
+          {[
+            { label: "Ov 1", ballIdx: 0 },
+            { label: "Ov 6", ballIdx: 35 },
+            { label: "Ov 10", ballIdx: 59 },
+            { label: "Ov 15", ballIdx: 89 },
+          ].map((tick) => {
+            const x = getX(tick.ballIdx);
             return (
-              <g key={ovr}>
-                <line x1={x} y1={padTop + chartH} x2={x} y2={padTop + chartH + 3} stroke="#475569" />
-                <text
-                  x={x}
-                  y={padTop + chartH + 14}
-                  fontSize="9"
-                  fill="#8B949E"
-                  textAnchor="middle"
-                >
-                  Ov {ovr + 1}
-                </text>
-              </g>
+              <text
+                key={tick.label}
+                x={x}
+                y={padTop + chartH + 15}
+                fontSize={9}
+                fill="#64748b"
+                textAnchor="middle"
+                className="font-mono"
+              >
+                {tick.label}
+              </text>
             );
           })}
 
-          {/* Area Fill */}
-          <path d={areaD} fill="url(#flatAreaGrad)" />
-
-          {/* Main Trend Line */}
+          {/* Probability curve path */}
           <path
             d={pathD}
             fill="none"
             stroke="#10b981"
-            strokeWidth="2"
+            strokeWidth={2}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
 
-          {/* Active Crosshair Guide */}
+          {/* Active Crosshair vertical line */}
           {activePoint && (
-            <g pointerEvents="none">
-              <line
-                x1={activePoint.cx}
-                y1={padTop}
-                x2={activePoint.cx}
-                y2={padTop + chartH}
-                stroke="#8B949E"
-                strokeWidth="1"
-                strokeDasharray="2 2"
-              />
-              <circle
-                cx={activePoint.cx}
-                cy={activePoint.cy}
-                r={pinnedPoint ? 8 : 6}
-                fill="none"
-                stroke="#FFFFFF"
-                strokeWidth={pinnedPoint ? 2 : 1.5}
-              />
-            </g>
+            <line
+              x1={activePoint.cx}
+              y1={padTop}
+              x2={activePoint.cx}
+              y2={padTop + chartH}
+              stroke="#94a3b8"
+              strokeDasharray="3 3"
+              strokeWidth={1}
+              strokeOpacity={0.6}
+            />
           )}
 
-          {/* Interactive Delivery Dots */}
+          {/* Key Deliveries */}
           {balls.map((b, i) => {
-            const isWicket = b.wicket;
-            const isSix = b.runs >= 6;
-            const isFour = b.runs >= 4 && b.runs < 6;
-            const isSignificant = isWicket || isSix || isFour;
+            const kind = classifyBall(b);
+            const isSignificant = kind === "wicket" || kind === "six" || kind === "four";
 
             if (!isSignificant) return null;
 
@@ -259,9 +229,9 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
               prob: Math.round(b.winProbability * 100),
               score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
               commentary: b.commentary,
-              isWicket,
-              isSix,
-              isFour,
+              isWicket: kind === "wicket",
+              isSix: kind === "six",
+              isFour: kind === "four",
               batter: b.batter,
               bowler: b.bowler,
               runs: b.runs,
@@ -269,27 +239,44 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
               cy,
             };
 
-            const fillColor = isWicket ? "#EF4444" : isSix ? "#10B981" : "#3B82F6";
+            const fillColor = EVENT_STYLE[kind].chartColor;
 
             return (
               <g
                 key={i}
                 className="cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePointClick(pointData);
+                }}
                 onMouseEnter={() => setHoveredPoint(pointData)}
                 onMouseLeave={() => setHoveredPoint(null)}
-                onClick={() => handlePointClick(pointData)}
               >
-                {/* 14px hit target prevents cursor drop */}
-                <circle cx={cx} cy={cy} r={14} fill="transparent" />
-
-                {/* Visible dot */}
                 <circle
                   cx={cx}
                   cy={cy}
-                  r={isWicket ? 5 : 4}
+                  r={12}
+                  fill="transparent"
+                  className="cursor-pointer"
+                />
+
+                {(isSelected || isHovered) && (
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={7}
+                    fill={fillColor}
+                    opacity={0.3}
+                  />
+                )}
+
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={isSelected || isHovered ? 4.5 : 3.5}
                   fill={fillColor}
-                  stroke="#FFFFFF"
-                  strokeWidth={isSelected || isHovered ? 2.5 : 1}
+                  stroke="#161B22"
+                  strokeWidth={1.5}
                 />
               </g>
             );
@@ -297,11 +284,11 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
         </svg>
       </div>
 
-      {/* Inspector Details */}
-      <div>
+      {/* Stable Details Container */}
+      <div className="min-h-[72px] flex items-center">
         {activePoint ? (
-          <div className="p-3 rounded-lg bg-[#0E1116] border border-[#262C36] text-xs">
-            <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-[#262C36]">
+          <div className="w-full p-3 rounded-chip bg-brand-bg border border-brand-border text-xs space-y-1.5 transition-all">
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-slate-200">
                   {activePoint.overText}
@@ -313,29 +300,30 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
                 <span
                   className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                     activePoint.isWicket
-                      ? "bg-rose-500/15 text-rose-400"
+                      ? EVENT_STYLE.wicket.badge
                       : activePoint.isSix
-                      ? "bg-emerald-500/15 text-emerald-400"
-                      : "bg-blue-500/15 text-blue-400"
+                      ? EVENT_STYLE.six.badge
+                      : EVENT_STYLE.four.badge
                   }`}
                 >
-                  {activePoint.isWicket ? "Wicket" : activePoint.isSix ? "Six" : "Four"}
+                  {activePoint.isWicket ? "WICKET" : activePoint.isSix ? "SIX" : "FOUR"}
                 </span>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="tabular-nums font-semibold text-emerald-400">
-                  {activePoint.prob}% win
-                </span>
-                <span className="tabular-nums text-slate-400">
-                  ({activePoint.score})
-                </span>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <span className="tabular-nums font-bold text-emerald-400">
+                    {activePoint.prob}%
+                  </span>
+                  <span className="text-[10px] text-slate-500 ml-1">
+                    ({activePoint.score})
+                  </span>
+                </div>
                 {pinnedPoint && (
                   <button
                     type="button"
                     onClick={() => setPinnedPoint(null)}
-                    className="text-slate-400 hover:text-white ml-1"
-                    title="Close"
+                    className="p-1 rounded hover:bg-brand-surface text-slate-400 hover:text-slate-200 transition-colors"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -343,12 +331,12 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
               </div>
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
+            <p className="text-slate-300 text-[11px] leading-relaxed">
               {activePoint.commentary}
             </p>
           </div>
         ) : (
-          <div className="text-center text-xs text-slate-400 py-1">
+          <div className="w-full py-2.5 px-3 rounded-chip bg-brand-bg/50 border border-brand-border/40 text-center text-[11px] text-slate-500">
             Tap a dot for details
           </div>
         )}

@@ -13,7 +13,7 @@ type AppState = "gate" | "loading" | "recap" | "live" | "error";
 export const CatchUpFlow: React.FC = () => {
   const [appState, setAppState] = useState<AppState>("gate");
   const [fromOver, setFromOver] = useState<number>(5); // default over index 5 (Over 6)
-  const [toOver, setToOver] = useState<number>(14.2);  // default live cutoff 14.2 (Zero two-ball gap)
+  const [toOver, setToOver] = useState<number>(matchMeta.currentLiveOver);
   const [recapData, setRecapData] = useState<RecapPayload | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -75,21 +75,20 @@ export const CatchUpFlow: React.FC = () => {
   };
 
   return (
-    <main className="min-h-screen bg-[#0E1116] text-[#F0F6FC] flex flex-col font-sans selection:bg-[#E11D48] selection:text-white">
+    <main className="min-h-screen flex flex-col font-sans">
       {/* Screen 1: Spoiler Gate */}
       {appState === "gate" && (
         <SpoilerGate
           meta={matchMeta}
           onCatchUp={handleStartCatchUp}
           onJumpToLiveDirect={handleJumpToLiveDirect}
-          isLoading={false}
         />
       )}
 
       {/* Loading Overlay */}
       {appState === "loading" && (
         <div className="w-full max-w-sm mx-auto my-auto px-4 py-24 text-center">
-          <Loader2 className="w-8 h-8 mx-auto mb-4 text-[#E11D48] animate-spin" />
+          <Loader2 className="w-8 h-8 mx-auto mb-4 text-brand-red animate-spin" />
 
           <h2 className="text-base font-semibold text-slate-100 mb-1">
             Catching you up on overs {fromOver + 1} to {toOver}
@@ -139,7 +138,7 @@ export const CatchUpFlow: React.FC = () => {
             <button
               type="button"
               onClick={() => handleStartCatchUp(fromOver, toOver)}
-              className="px-3.5 py-2 rounded-lg bg-[#161B22] border border-[#262C36] text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 transition-colors"
+              className="px-3.5 py-2 rounded-chip bg-brand-surface border border-brand-border text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Retry</span>
@@ -147,7 +146,7 @@ export const CatchUpFlow: React.FC = () => {
             <button
               type="button"
               onClick={handleJumpToLiveDirect}
-              className="px-3.5 py-2 rounded-lg bg-[#E11D48] hover:bg-[#BE123C] text-xs font-semibold text-white transition-colors"
+              className="px-3.5 py-2 rounded-chip bg-brand-red hover:bg-brand-redHover text-xs font-semibold text-white transition-colors"
             >
               <span>Skip to live</span>
             </button>

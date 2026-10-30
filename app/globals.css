@@ -15,7 +15,3 @@
     -moz-osx-font-smoothing: grayscale;
   }
 }
-
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
-}

@@ -7,18 +7,18 @@ export type WicketType =
   | "hit wicket";
 
 export interface Ball {
-  over: number;           // 0-indexed (0 = over 1, 19 = over 20)
-  ball: number;           // 1-6 (or extras)
+  over: number;           // 0-indexed completed overs (0 = over 1, 14 = over 15)
+  ball: number;           // 1-6 (delivery in over)
   batter: string;
   bowler: string;
-  runs: number;           // total runs scored on this delivery (including extras)
-  batterRuns: number;     // runs credited to batter
-  extras: number;
+  runs: number;           // runs scored off the bat on this delivery
+  isBoundaryFour?: boolean; // explicit boundary flag
+  isSix?: boolean;          // explicit six flag
   wicket: boolean;
   wicketType?: WicketType;
   dismissedPlayer?: string;
-  commentary: string;     // ball-by-ball commentary
-  winProbability: number; // 0.0 – 1.0 (batting team win chance)
+  commentary: string;
+  winProbability: number; // 0.0 to 1.0
   cumulativeScore: number;
   cumulativeWickets: number;
 }
@@ -29,18 +29,20 @@ export interface MatchMeta {
   team1: string;          // Batting first (set target)
   team2: string;          // Batting second (chasing)
   venue: string;
-  matchDate: string;
   format: "T20" | "ODI";
   totalOvers: number;
   target: number;         // Chasing target
-  currentLiveOver: number;// e.g. 14.2 (Over 14, 2 balls done)
+  liveBallIndex: number;  // Exact index of current live ball in matchBalls (e.g. 85 for 14.2)
+  currentLiveOver: number;// Display helper (e.g. 14.2)
   innings: 1 | 2;
   isMatchFinished?: boolean;
 }
 
+export type BallEventKind = "wicket" | "six" | "four" | "dot" | "run";
+
 export interface TurningPointMoment {
   over: string;           // e.g. "9.3" or "14.2"
-  label: "WICKET" | "SIX" | "CRITICAL MOMENT" | "MAIDEN" | "BOUNDARY";
+  label: "WICKET" | "SIX" | "CRITICAL MOMENT" | "BOUNDARY";
   player: string;
   description: string;
   impact: string;
@@ -80,7 +82,7 @@ export interface FantasyTeamPerformance {
 
 export interface ThrillRating {
   rating: number; // e.g. 9.4
-  verdict: string; // e.g. "Thriller finish, went to the last over with 3 lead changes"
+  verdict: string;
   worthReplay: boolean;
 }
 
@@ -97,8 +99,7 @@ export interface RecapPayload {
   story: string;
   top3Moments: TurningPointMoment[];
   mood: "Cruising" | "Knife's edge" | "Chasing hard" | "Game over" | "Comeback on";
-  moodEmoji?: string;
-  partnershipSummary?: string;
+  partnershipSummary: string;
   oversCovered: string;   // e.g. "Overs 6 – 14.2"
   fantasyImpact?: FantasyTeamPerformance;
   thrillRating?: ThrillRating;
@@ -108,21 +109,24 @@ export interface RecapPayload {
   spoilerLevel?: SpoilerLevel;
 }
 
-export interface RecapRequest {
-  fromOver: number;       // 0-indexed inclusive (e.g. 5 for over 6)
-  toOver: number;         // number (e.g. 14.2)
-  matchId?: string;
-  spoilerLevel?: SpoilerLevel;
-  language?: LanguageMode;
-  isWholeMatch?: boolean;
+export interface ApiSuccessResponse<T> {
+  success: true;
+  data: T;
+  meta?: {
+    matchId?: string;
+    usedFallback?: boolean;
+    cached?: boolean;
+    oversCovered?: string;
+  };
 }
 
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: {
+export interface ApiErrorResponse {
+  success: false;
+  error: {
     code: string;
     message: string;
     retryable: boolean;
   };
 }
+
+export type ApiResponse<T> = ApiSuccessResponse<T> | ApiErrorResponse;

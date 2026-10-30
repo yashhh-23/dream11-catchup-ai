@@ -11,10 +11,18 @@ import {
 } from "@/lib/matchUtils";
 import { buildRecapPrompt } from "@/lib/promptBuilder";
 import { callGroqRecap } from "@/lib/groqClient";
-import { ApiResponse, RecapPayload, SpoilerLevel, LanguageMode } from "@/types";
+import { ApiResponse, RecapPayload, SpoilerLevel } from "@/types";
 
 // In-Memory cache for ultra-fast <10ms retrieval of common windows
 const recapCache = new Map<string, RecapPayload>();
+
+function errorResponse(code: string, message: string, status: number) {
+  const errRes: ApiResponse<null> = {
+    success: false,
+    error: { code, message, retryable: status >= 500 },
+  };
+  return NextResponse.json(errRes, { status });
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -25,60 +33,43 @@ export async function POST(req: NextRequest) {
       toOver, 
       spoilerLevel = "story-and-score", 
       language = "en",
-      isWholeMatch = false 
     } = body;
 
-    // Load match from registry (accepts matchId, defaults gracefully)
     const { meta, balls } = getMatchById(matchId);
 
     // Validation S1, S6: Type & bounds checks
     if (typeof fromOver !== "number" || typeof toOver !== "number") {
-      const errRes: ApiResponse<null> = {
-        success: false,
-        error: { code: "INVALID_INPUT", message: "fromOver and toOver must be valid numbers.", retryable: false },
-      };
-      return NextResponse.json(errRes, { status: 400 });
+      return errorResponse("INVALID_INPUT", "fromOver and toOver must be valid numbers.", 400);
     }
 
     if (fromOver < 0 || toOver > meta.totalOvers + 1) {
-      const errRes: ApiResponse<null> = {
-        success: false,
-        error: { code: "OUT_OF_BOUNDS", message: `Overs must be within 0 to ${meta.totalOvers}.`, retryable: false },
-      };
-      return NextResponse.json(errRes, { status: 400 });
+      return errorResponse("OUT_OF_BOUNDS", `Overs must be within 0 to ${meta.totalOvers}.`, 400);
     }
 
     if (fromOver >= toOver) {
-      const errRes: ApiResponse<null> = {
-        success: false,
-        error: { code: "INVALID_RANGE", message: "Start over must be strictly less than end over.", retryable: false },
-      };
-      return NextResponse.json(errRes, { status: 400 });
+      return errorResponse("INVALID_RANGE", "Start over must be strictly less than end over.", 400);
     }
 
     // Cache key for prefetching and instant response
     const cacheKey = `${meta.matchId}:${fromOver}:${toOver}:${spoilerLevel}:${language}`;
     if (recapCache.has(cacheKey)) {
-      return NextResponse.json({
+      const res: ApiResponse<RecapPayload> = {
         success: true,
-        data: recapCache.get(cacheKey),
+        data: recapCache.get(cacheKey)!,
         meta: {
           matchId: meta.matchId,
           usedFallback: false,
           cached: true,
           oversCovered: `Overs ${fromOver + 1} – ${toOver}`,
         }
-      });
+      };
+      return NextResponse.json(res);
     }
 
     // Slice match data without two-ball gap (supports fractional live overs like 14.2)
     const missedBalls = sliceBalls(balls, fromOver, toOver);
     if (missedBalls.length === 0) {
-      const errRes: ApiResponse<null> = {
-        success: false,
-        error: { code: "NO_DATA", message: "No ball data found for the selected over range.", retryable: false },
-      };
-      return NextResponse.json(errRes, { status: 404 });
+      return errorResponse("NO_DATA", "No ball data found for the selected over range.", 404);
     }
 
     const fromDisplay = fromOver + 1;
@@ -125,9 +116,7 @@ export async function POST(req: NextRequest) {
 
     // Determine mood using numeric comparisons
     let calculatedMood: RecapPayload["mood"] = "Knife's edge";
-    if (stats.wickets >= 3) {
-      calculatedMood = "Knife's edge";
-    } else if (stats.runs >= 35 && stats.wickets <= 1) {
+    if (stats.runs >= 35 && stats.wickets <= 1) {
       calculatedMood = "Cruising";
     } else if (stats.runRate < 7.0) {
       calculatedMood = "Chasing hard";
@@ -139,64 +128,50 @@ export async function POST(req: NextRequest) {
     let recapPayload: RecapPayload | null = null;
     let usedFallback = false;
 
-    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY.trim().length > 5) {
-      try {
-        const prompt = buildRecapPrompt(missedBalls, meta, fromDisplay, toDisplay, computedMoments);
-        const rawResponse = await callGroqRecap(prompt);
+    try {
+      const prompt = buildRecapPrompt(missedBalls, meta, fromDisplay, toDisplay, computedMoments);
+      const rawResponse = await callGroqRecap(prompt);
+      const parsed = JSON.parse(rawResponse);
 
-        const cleaned = rawResponse
-          .replace(/^```json\s*/i, "")
-          .replace(/^```\s*/i, "")
-          .replace(/```$/i, "")
-          .trim();
+      if (parsed.oneLiner && parsed.story) {
+        // Merge LLM descriptions into code-computed ground-truth moments
+        const finalMoments = computedMoments.map((codeMom, idx) => {
+          const llmMom = parsed.top3Moments?.[idx] || parsed.top3Moments?.find((m: any) => m.over === codeMom.over);
+          return {
+            ...codeMom,
+            description: (typeof llmMom?.description === "string" && llmMom.description.trim().length > 5)
+              ? llmMom.description.trim()
+              : codeMom.description,
+            impact: (typeof llmMom?.impact === "string" && llmMom.impact.trim().length > 5)
+              ? llmMom.impact.trim()
+              : codeMom.impact,
+          };
+        });
 
-        const parsed = JSON.parse(cleaned);
-
-        if (parsed.oneLiner && parsed.story) {
-          // Merge LLM descriptions into code-computed ground-truth moments
-          const finalMoments = computedMoments.map((codeMom, idx) => {
-            const llmMom = parsed.top3Moments?.[idx] || parsed.top3Moments?.find((m: any) => m.over === codeMom.over);
-            return {
-              ...codeMom,
-              description: (typeof llmMom?.description === "string" && llmMom.description.trim().length > 5)
-                ? llmMom.description.trim()
-                : codeMom.description,
-              impact: (typeof llmMom?.impact === "string" && llmMom.impact.trim().length > 5)
-                ? llmMom.impact.trim()
-                : codeMom.impact,
-            };
-          });
-
-          // Validate that all overs and players exist in the selected ball data
-          const validation = validateRecapAgainstBallData(finalMoments, missedBalls);
-          if (validation.isValid) {
-            recapPayload = {
-              oneLiner: parsed.oneLiner,
-              story: parsed.story,
-              top3Moments: finalMoments,
-              mood: parsed.mood || calculatedMood,
-              partnershipSummary: parsed.partnershipSummary || `${stats.runs} runs scored for the loss of ${stats.wickets} wickets in this phase.`,
-              oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
-              fantasyImpact,
-              thrillRating,
-              whatToWatchNext,
-              hinglishOneLiner: `India ne Overs ${fromDisplay}–${toDisplay} me ${stats.runs} banaye aur ${stats.wickets} wicket gawaye. Match abhi bhi full tight chal raha hai!`,
-              hinglishStory: `Is phase me bohot zabardast drama hua! ${dismissedInPhase.length > 0 ? `NZ ne ${dismissedInPhase.join(", ")} ko out karke jhatka diya.` : "India ke batters ne aaram se boundary nikali."} Phir Hardik aur Tilak ne counter-attack karke score ko banaye rakha. Aage ka over dekhne laayak hoga!`,
-              spoilerLevel: spoilerLevel as SpoilerLevel,
-            };
-          } else {
-            console.warn("LLM moments failed validation, using code moments:", validation.issues);
-          }
+        // Validate that all overs and players exist in the selected ball data
+        const validation = validateRecapAgainstBallData(finalMoments, missedBalls);
+        if (validation.isValid) {
+          recapPayload = {
+            oneLiner: parsed.oneLiner,
+            story: parsed.story,
+            top3Moments: finalMoments,
+            mood: parsed.mood || calculatedMood,
+            partnershipSummary: parsed.partnershipSummary || `${stats.runs} runs scored for the loss of ${stats.wickets} wickets in this phase.`,
+            oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
+            fantasyImpact,
+            thrillRating,
+            whatToWatchNext,
+            hinglishOneLiner: `India ne Overs ${fromDisplay}–${toDisplay} me ${stats.runs} banaye aur ${stats.wickets} wicket gawaye. Match abhi bhi full tight chal raha hai!`,
+            hinglishStory: `Is phase me bohot zabardast drama hua! ${dismissedInPhase.length > 0 ? `NZ ne ${dismissedInPhase.join(", ")} ko out karke jhatka diya.` : "India ke batters ne aaram se boundary nikali."} Phir Hardik aur Tilak ne counter-attack karke score ko banaye rakha. Aage ka over dekhne laayak hoga!`,
+            spoilerLevel: spoilerLevel as SpoilerLevel,
+          };
         }
-      } catch (aiErr: any) {
-        console.warn("Groq inference error, falling back to deterministic engine:", aiErr?.message || aiErr);
-        usedFallback = true;
       }
-    } else {
+    } catch {
       usedFallback = true;
     }
 
-    // FDE Resilience Pattern: Deterministic Fallback without leaking future live state
+    // Deterministic Fallback without leaking future live state
     if (!recapPayload) {
       const endSituation = runsNeededAtPhaseEnd <= 0
         ? `${meta.team2} achieved the target.`
@@ -227,7 +202,7 @@ export async function POST(req: NextRequest) {
     // Store in cache for subsequent instant loads
     recapCache.set(cacheKey, recapPayload);
 
-    return NextResponse.json({
+    const successRes: ApiResponse<RecapPayload> = {
       success: true,
       data: recapPayload,
       meta: {
@@ -235,20 +210,14 @@ export async function POST(req: NextRequest) {
         usedFallback,
         oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
       }
-    });
+    };
+    return NextResponse.json(successRes);
 
   } catch (err: any) {
-    console.error("Recap route critical error:", err);
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: "SERVER_ERROR",
-          message: err?.message || "An unexpected error occurred while generating the match recap.",
-          retryable: true,
-        },
-      },
-      { status: 500 }
+    return errorResponse(
+      "SERVER_ERROR",
+      err?.message || "An unexpected error occurred while generating the match recap.",
+      500
     );
   }
 }

@@ -2,22 +2,26 @@
 
 import React, { useState, useEffect } from "react";
 import { MatchMeta, SpoilerLevel } from "@/types";
-import { Lock, ArrowRight, SlidersHorizontal, Loader2, Clock, BellOff, Sparkles, ShieldCheck } from "lucide-react";
+import { Lock, ArrowRight, SlidersHorizontal, Clock, BellOff, Sparkles, ShieldCheck } from "lucide-react";
 
 interface SpoilerGateProps {
   meta: MatchMeta;
   onCatchUp: (fromOver: number, toOver: number, spoilerLevel?: SpoilerLevel, isWholeMatch?: boolean) => void;
   onJumpToLiveDirect: () => void;
-  isLoading: boolean;
 }
+
+const PRESETS = [
+  { id: 6, title: "Post-Powerplay", desc: "From over 6", isWhole: false },
+  { id: 10, title: "Middle overs", desc: "From over 10", isWhole: false },
+  { id: 1, title: "Full match", desc: "From over 1 (Start)", isWhole: true },
+] as const;
 
 export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   meta,
   onCatchUp,
   onJumpToLiveDirect,
-  isLoading,
 }) => {
-  const liveTargetOver = meta.currentLiveOver; // 14.2
+  const liveTargetOver = meta.currentLiveOver;
 
   // Start over (1-based display number)
   const [selectedStartOver, setSelectedStartOver] = useState<number>(6);
@@ -27,7 +31,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   const [dndShieldActive, setDndShieldActive] = useState<boolean>(true);
   const [isWholeMatchSelected, setIsWholeMatchSelected] = useState<boolean>(false);
 
-  // Prefetch default recap window (6 -> 14.2) on gate load to make click instant
+  // Prefetch default recap window (6 -> liveTargetOver) on gate load to make click instant
   useEffect(() => {
     fetch("/api/recap", {
       method: "POST",
@@ -35,23 +39,21 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
       body: JSON.stringify({
         matchId: meta.matchId,
         fromOver: 5,
-        toOver: 14.2,
+        toOver: liveTargetOver,
         spoilerLevel: "story-and-score",
       }),
     }).catch(() => {});
-  }, [meta.matchId]);
+  }, [meta.matchId, liveTargetOver]);
 
   const missedOversCount = Math.max(1, Math.floor(liveTargetOver) - selectedStartOver + 1);
   const readTimeEstimate = missedOversCount <= 5 ? "about 30 sec" : missedOversCount <= 10 ? "about 45 sec" : "about 1 min";
 
   const handleStartCatchUp = () => {
-    if (isLoading) return;
     const fromIndex = Math.max(0, selectedStartOver - 1);
     onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected);
   };
 
   const handleTimeSelect = (minutes: number) => {
-    // Roughly 4 mins per over in white-ball cricket
     const oversMissed = Math.round(minutes / 4.2);
     const calculatedStart = Math.max(1, Math.floor(liveTargetOver) - oversMissed);
     setSelectedStartOver(calculatedStart);
@@ -60,10 +62,10 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
   return (
     <div className="w-full max-w-xl mx-auto px-4 py-8 sm:py-12">
-      {/* Simplified, uncluttered header */}
-      <header className="flex items-center justify-between pb-4 mb-6 border-b border-[#262C36]">
+      {/* Header */}
+      <header className="flex items-center justify-between pb-4 mb-6 border-b border-brand-border">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-[#E11D48] flex items-center justify-center font-bold text-white text-sm">
+          <div className="w-7 h-7 rounded-chip bg-brand-red flex items-center justify-center font-bold text-white text-sm">
             D
           </div>
           <span className="font-semibold text-sm text-[#F0F6FC]">
@@ -76,71 +78,67 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
         </div>
       </header>
 
-      {/* Single flattened container */}
-      <div className="bg-[#161B22] border border-[#262C36] rounded-xl p-5 sm:p-6 space-y-6">
-        {/* Match Details & Cricbuzz-style Two-Column Scorecard */}
+      {/* Main Container */}
+      <div className="bg-brand-surface border border-brand-border rounded-container p-5 sm:p-6 space-y-6">
+        {/* Match Details & Two-Column Scorecard */}
         <div>
           <div className="text-xs text-slate-400 mb-3 flex items-center justify-between">
             <span>{meta.title} · {meta.venue}</span>
-            <span className="text-[11px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
+            <span className="text-[11px] bg-brand-bg text-slate-300 px-2 py-0.5 rounded-chip border border-brand-border">
               Zero-Spoiler Shield
             </span>
           </div>
 
           <div className="space-y-2.5">
-            {/* Team 1: New Zealand */}
-            <div className="flex items-center justify-between text-sm py-1">
-              <div className="flex items-center gap-2.5">
-                <span className="w-5 h-3.5 rounded-sm bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] font-bold text-slate-300">
-                  NZ
-                </span>
-                <span className="font-medium text-[#F0F6FC]">{meta.team1}</span>
+            {[
+              { code: "NZ", name: meta.team1, score: "177/7", over: "(20.0)", badgeBg: "bg-slate-800 border-slate-700 text-slate-300", masked: false },
+              { code: "IND", name: meta.team2, score: "••• / •", over: `(${meta.currentLiveOver} ov)`, badgeBg: "bg-blue-900 border-blue-800 text-blue-200", masked: true },
+            ].map((team, idx) => (
+              <div
+                key={team.code}
+                className={`flex items-center justify-between text-sm py-1 ${idx > 0 ? "border-t border-brand-border" : ""}`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className={`w-5 h-3.5 rounded-sm border flex items-center justify-center text-[10px] font-bold ${team.badgeBg}`}>
+                    {team.code}
+                  </span>
+                  <span className="font-medium text-[#F0F6FC]">{team.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`tabular-nums font-semibold ${team.masked ? "tracking-widest text-slate-400 select-none" : "text-slate-300"}`}>
+                    {team.score}
+                  </span>
+                  <span className="text-xs text-slate-400 font-normal">
+                    {team.over}
+                  </span>
+                  {team.masked && (
+                    <span title="Live score shielded to preserve match tension">
+                      <Lock className="w-3.5 h-3.5 text-brand-red" />
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="tabular-nums font-semibold text-slate-300">
-                177/7 <span className="text-xs text-slate-400 font-normal">(20.0)</span>
-              </div>
-            </div>
-
-            {/* Team 2: India (Score completely masked) */}
-            <div className="flex items-center justify-between text-sm py-1 border-t border-[#262C36]">
-              <div className="flex items-center gap-2.5">
-                <span className="w-5 h-3.5 rounded-sm bg-blue-900 border border-blue-800 flex items-center justify-center text-[10px] font-bold text-blue-200">
-                  IND
-                </span>
-                <span className="font-medium text-[#F0F6FC]">{meta.team2}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="tabular-nums font-semibold tracking-widest text-slate-400 select-none">
-                  ••• / •
-                </span>
-                <span className="text-xs text-slate-400 font-normal">
-                  ({meta.currentLiveOver} ov)
-                </span>
-                <span title="Live score shielded to preserve match tension">
-                  <Lock className="w-3.5 h-3.5 text-[#E11D48]" />
-                </span>
-              </div>
-            </div>
+            ))}
           </div>
 
-          <div className="mt-3 pt-3 border-t border-[#262C36] text-xs text-slate-400 flex items-center justify-between">
+          <div className="mt-3 pt-3 border-t border-brand-border text-xs text-slate-400 flex items-center justify-between">
             <span>Target {meta.target}</span>
             <span>Live point {meta.currentLiveOver} ov</span>
           </div>
         </div>
 
-        {/* Input Selector Mode: Overs vs Time Away */}
+        {/* Input Selector Mode */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-300">
               Where did you leave off?
             </span>
-            <div className="flex items-center gap-1 bg-[#0E1116] p-0.5 rounded-lg border border-[#262C36] text-[11px]">
+            <div className="flex items-center gap-1 bg-brand-bg p-0.5 rounded-chip border border-brand-border text-[11px]">
               <button
                 type="button"
                 onClick={() => setInputMode("overs")}
                 className={`px-2.5 py-1 rounded-md transition-colors ${
-                  inputMode === "overs" ? "bg-[#262C36] text-white font-medium" : "text-slate-400 hover:text-slate-200"
+                  inputMode === "overs" ? "bg-brand-border text-white font-medium" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 By over
@@ -149,7 +147,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
                 type="button"
                 onClick={() => setInputMode("time")}
                 className={`px-2.5 py-1 rounded-md transition-colors flex items-center gap-1 ${
-                  inputMode === "time" ? "bg-[#262C36] text-white font-medium" : "text-slate-400 hover:text-slate-200"
+                  inputMode === "time" ? "bg-brand-border text-white font-medium" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <Clock className="w-3 h-3" />
@@ -160,44 +158,27 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
           {inputMode === "overs" ? (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => { setSelectedStartOver(6); setIsWholeMatchSelected(false); }}
-                className={`px-3 py-2.5 rounded-lg text-xs font-medium text-left transition-colors border ${
-                  selectedStartOver === 6 && !isWholeMatchSelected
-                    ? "bg-[#E11D48] text-white border-[#E11D48]"
-                    : "bg-[#0E1116] text-slate-300 border-[#262C36] hover:bg-[#1C2128]"
-                }`}
-              >
-                <div className="font-semibold">Post-Powerplay</div>
-                <div className="text-[11px] opacity-80">From over 6</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => { setSelectedStartOver(10); setIsWholeMatchSelected(false); }}
-                className={`px-3 py-2.5 rounded-lg text-xs font-medium text-left transition-colors border ${
-                  selectedStartOver === 10 && !isWholeMatchSelected
-                    ? "bg-[#E11D48] text-white border-[#E11D48]"
-                    : "bg-[#0E1116] text-slate-300 border-[#262C36] hover:bg-[#1C2128]"
-                }`}
-              >
-                <div className="font-semibold">Middle overs</div>
-                <div className="text-[11px] opacity-80">From over 10</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => { setSelectedStartOver(1); setIsWholeMatchSelected(true); }}
-                className={`px-3 py-2.5 rounded-lg text-xs font-medium text-left transition-colors border ${
-                  isWholeMatchSelected
-                    ? "bg-[#E11D48] text-white border-[#E11D48]"
-                    : "bg-[#0E1116] text-slate-300 border-[#262C36] hover:bg-[#1C2128]"
-                }`}
-              >
-                <div className="font-semibold">Full match</div>
-                <div className="text-[11px] opacity-80">From over 1 (Start)</div>
-              </button>
+              {PRESETS.map((p) => {
+                const isSelected = p.isWhole ? isWholeMatchSelected : selectedStartOver === p.id && !isWholeMatchSelected;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedStartOver(p.id);
+                      setIsWholeMatchSelected(p.isWhole);
+                    }}
+                    className={`px-3 py-2.5 rounded-chip text-xs font-medium text-left transition-colors border ${
+                      isSelected
+                        ? "bg-brand-red text-white border-brand-red"
+                        : "bg-brand-bg text-slate-300 border-brand-border hover:bg-brand-surfaceHover"
+                    }`}
+                  >
+                    <div className="font-semibold">{p.title}</div>
+                    <div className="text-[11px] opacity-80">{p.desc}</div>
+                  </button>
+                );
+              })}
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
@@ -211,7 +192,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
                   key={idx}
                   type="button"
                   onClick={() => handleTimeSelect(item.mins)}
-                  className="p-2.5 rounded-lg text-xs text-left bg-[#0E1116] border border-[#262C36] hover:bg-[#1C2128] text-slate-300 transition-colors"
+                  className="p-2.5 rounded-chip text-xs text-left bg-brand-bg border border-brand-border hover:bg-brand-surfaceHover text-slate-300 transition-colors"
                 >
                   <div className="font-semibold text-white">{item.label}</div>
                   <div className="text-[10px] text-slate-400">{item.overDesc}</div>
@@ -220,7 +201,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             </div>
           )}
 
-          {/* Optional Slider as an 'Adjust' toggle */}
+          {/* Slider for fine tuning */}
           <div className="pt-1">
             <button
               type="button"
@@ -232,7 +213,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             </button>
 
             {showCustomSlider && (
-              <div className="mt-2.5 p-3 bg-[#0E1116] border border-[#262C36] rounded-lg space-y-2">
+              <div className="mt-2.5 p-3 bg-brand-bg border border-brand-border rounded-chip space-y-2">
                 <div className="flex justify-between text-xs text-slate-300">
                   <span>Start catch-up at:</span>
                   <span className="font-semibold text-white">Over {selectedStartOver}</span>
@@ -247,7 +228,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
                     setSelectedStartOver(parseInt(e.target.value, 10));
                     setIsWholeMatchSelected(parseInt(e.target.value, 10) === 1);
                   }}
-                  className="w-full h-1.5 bg-[#262C36] rounded-lg appearance-none cursor-pointer accent-[#E11D48]"
+                  className="w-full h-1.5 bg-brand-border rounded-chip appearance-none cursor-pointer accent-brand-red"
                 />
                 <div className="flex justify-between text-[10px] text-slate-400">
                   <span>Over 1</span>
@@ -258,9 +239,9 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </div>
         </div>
 
-        {/* Thrill Rating Preview if Whole Match is selected */}
+        {/* Thrill Rating Preview */}
         {isWholeMatchSelected && (
-          <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 flex items-start gap-2.5 text-xs">
+          <div className="p-3 rounded-chip bg-amber-500/10 border border-amber-500/25 flex items-start gap-2.5 text-xs">
             <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <div className="font-semibold text-amber-300 flex items-center gap-1.5">
@@ -274,8 +255,8 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </div>
         )}
 
-        {/* Spoiler Levels Selector */}
-        <div className="space-y-2 pt-1 border-t border-[#262C36]">
+        {/* Spoiler Levels */}
+        <div className="space-y-2 pt-1 border-t border-brand-border">
           <div className="text-xs font-semibold text-slate-300 flex items-center justify-between">
             <span>Spoiler protection level:</span>
             <span className="text-[11px] text-slate-400 capitalize">{spoilerLevel.replace(/-/g, " ")}</span>
@@ -291,10 +272,10 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
                 key={lvl.id}
                 type="button"
                 onClick={() => setSpoilerLevel(lvl.id as SpoilerLevel)}
-                className={`p-2 rounded-lg text-left border transition-colors ${
+                className={`p-2 rounded-chip text-left border transition-colors ${
                   spoilerLevel === lvl.id
-                    ? "bg-[#262C36] border-slate-500 text-white"
-                    : "bg-[#0E1116] border-[#262C36] text-slate-400 hover:text-slate-200"
+                    ? "bg-brand-border border-slate-500 text-white"
+                    : "bg-brand-bg border-brand-border text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <div className="font-medium text-slate-200 text-[11px]">{lvl.title}</div>
@@ -304,8 +285,8 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </div>
         </div>
 
-        {/* Pre-Match / DND Notification Shield Toggle */}
-        <div className="p-3 rounded-lg bg-[#0E1116] border border-[#262C36] flex items-center justify-between text-xs">
+        {/* Lock Screen DND Shield */}
+        <div className="p-3 rounded-chip bg-brand-bg border border-brand-border flex items-center justify-between text-xs">
           <div className="flex items-center gap-2">
             {dndShieldActive ? (
               <ShieldCheck className="w-4 h-4 text-emerald-400" />
@@ -321,7 +302,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             type="button"
             onClick={() => setDndShieldActive(!dndShieldActive)}
             className={`w-9 h-5 rounded-full transition-colors p-0.5 ${
-              dndShieldActive ? "bg-[#E11D48]" : "bg-slate-700"
+              dndShieldActive ? "bg-brand-red" : "bg-slate-700"
             }`}
           >
             <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
@@ -339,27 +320,17 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </span>
         </div>
 
-        {/* Primary Action Button (Flat fill, no glow) */}
+        {/* Primary Action Button */}
         <button
           type="button"
           onClick={handleStartCatchUp}
-          disabled={isLoading}
-          className="w-full py-3 px-4 rounded-xl font-semibold text-sm bg-[#E11D48] hover:bg-[#BE123C] text-white transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          className="w-full py-3 px-4 rounded-container font-semibold text-sm bg-brand-red hover:bg-brand-redHover text-white transition-colors flex items-center justify-center gap-2"
         >
-          {isLoading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Synthesizing your recap...</span>
-            </>
-          ) : (
-            <>
-              <span>Catch me up (Overs {selectedStartOver}–{liveTargetOver})</span>
-              <ArrowRight className="w-4 h-4" />
-            </>
-          )}
+          <span>Catch me up (Overs {selectedStartOver}–{liveTargetOver})</span>
+          <ArrowRight className="w-4 h-4" />
         </button>
 
-        {/* Honest Escape Hatch */}
+        {/* Escape Hatch */}
         <div className="text-center pt-1">
           <button
             type="button"

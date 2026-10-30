@@ -1,5 +1,6 @@
 import type { 
   Ball, 
+  BallEventKind,
   TurningPointMoment, 
   FantasyTeamPerformance, 
   ThrillRating, 
@@ -8,54 +9,84 @@ import type {
 } from "../types/index.ts";
 
 /**
+ * Single source of truth for cricket ball classification.
+ * Uses explicit flags if present to avoid extras (byes, overthrows) counting as boundaries.
+ */
+export function classifyBall(ball: Ball): BallEventKind {
+  if (ball.wicket) return "wicket";
+  if (ball.isSix || (!ball.wicket && ball.runs === 6)) return "six";
+  if (ball.isBoundaryFour || (!ball.wicket && ball.runs === 4)) return "four";
+  if (ball.runs === 0) return "dot";
+  return "run";
+}
+
+export const EVENT_STYLE: Record<
+  BallEventKind,
+  { label: string; badge: string; circle: string; chartColor: string }
+> = {
+  wicket: {
+    label: "Wicket",
+    badge: "bg-rose-500/15 text-rose-400 border border-rose-500/30",
+    circle: "bg-rose-600 text-white",
+    chartColor: "#EF4444",
+  },
+  six: {
+    label: "Six",
+    badge: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30",
+    circle: "bg-emerald-600 text-white",
+    chartColor: "#10B981",
+  },
+  four: {
+    label: "Four",
+    badge: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+    circle: "bg-blue-600 text-white",
+    chartColor: "#3B82F6",
+  },
+  dot: {
+    label: "Dot",
+    badge: "bg-slate-800 text-slate-400 border border-slate-700",
+    circle: "bg-slate-800 text-slate-400 border border-slate-700",
+    chartColor: "#64748B",
+  },
+  run: {
+    label: "Run",
+    badge: "bg-slate-800 text-slate-300 border border-slate-700",
+    circle: "bg-slate-800 text-slate-200 border border-slate-700",
+    chartColor: "#94A3B8",
+  },
+};
+
+/**
  * Checks whether a delivery falls within the [fromOver, toOver] window.
  * Supports fractional overs (e.g. 14.2 represents over index 14, ball 2).
  */
 export function isBallInRange(ball: Ball, fromOver: number, toOver: number): boolean {
-  // fromOver is 0-indexed completed overs (e.g., fromOver = 5 means starting from over 6.1)
   const isAfterStart = ball.over >= fromOver;
-
   const toCompleted = Math.floor(toOver);
   const toFraction = Math.round((toOver - toCompleted) * 10);
 
   let isBeforeEnd: boolean;
   if (toFraction > 0) {
-    // Fractional over: e.g. 14.2 includes all overs < 14, plus over 14 balls 1..2
     isBeforeEnd = ball.over < toCompleted || (ball.over === toCompleted && ball.ball <= toFraction);
   } else {
-    // Integer over: e.g. 14 means all deliveries before over index 14 (i.e. overs 0 to 13 completed)
     isBeforeEnd = ball.over < toCompleted;
   }
 
   return isAfterStart && isBeforeEnd;
 }
 
-/**
- * Slices balls for overs in [fromOver, toOver]
- * Supports both integer over thresholds and fractional ball-precise cutoffs (e.g. 14.2)
- */
 export function sliceBalls(balls: Ball[], fromOver: number, toOver: number): Ball[] {
   return balls.filter(b => isBallInRange(b, fromOver, toOver));
 }
 
-/**
- * Format completed over and ball into standard cricket notation (e.g., over 9, ball 2 -> "9.2", over 14, ball 2 -> "14.2")
- */
 export function formatOver(over: number, ball: number): string {
   return `${over}.${ball}`;
 }
 
-/**
- * Formats win probability percentage
- */
 export function formatWinProb(prob: number): string {
   return `${Math.round(prob * 100)}%`;
 }
 
-/**
- * Real-time Mathematical Win-Probability Model for T20 Chases.
- * Evaluates log-odds based on remaining resources, required run rate, and wickets in hand.
- */
 export function calculateLiveWinProbability(
   target: number,
   currentRuns: number,
@@ -72,20 +103,17 @@ export function calculateLiveWinProbability(
 
   const runsNeeded = Math.max(0, target - currentRuns);
   const rrr = (runsNeeded / ballsRemaining) * 6;
-  const baseRRR = (target / totalBalls) * 6;
 
-  // Match start (0 deliveries bowled) is balanced at 50%
   if (ballsBowled === 0) {
     return 0.50;
   }
 
   const crr = (currentRuns / ballsBowled) * 6;
   const expectedWickets = (ballsBowled / totalBalls) * 5.5;
-  const wicketSurplus = expectedWickets - currentWickets; // positive is good for chasing team
+  const wicketSurplus = expectedWickets - currentWickets;
 
   let z = 0.35 * (crr - rrr) + 0.45 * wicketSurplus;
 
-  // High pressure death overs weighting
   if (ballsRemaining <= 30 && rrr > 10.0) {
     z -= (rrr - 10.0) * 0.35;
   }
@@ -94,56 +122,49 @@ export function calculateLiveWinProbability(
   }
 
   const rawProb = 1 / (1 + Math.exp(-z));
-
-  // Clamp within realistic live match limits (0.01 to 0.99)
   return Math.max(0.01, Math.min(0.99, Number(rawProb.toFixed(2))));
 }
 
-/**
- * Computes deterministic turning points from actual ball data
- */
 export function getTopMomentsFallback(balls: Ball[], maxMoments = 3): TurningPointMoment[] {
   if (!balls || balls.length === 0) return [];
 
-  // Track swing deltas between consecutive balls or wickets/sixes
-  const candidates: { ball: Ball; prevProb: number; delta: number }[] = [];
+  const candidates: { ball: Ball; prevProb: number; delta: number; kind: BallEventKind }[] = [];
 
   for (let i = 0; i < balls.length; i++) {
     const cur = balls[i];
     const prevProb = i > 0 ? balls[i - 1].winProbability : cur.winProbability;
     const delta = Math.abs(cur.winProbability - prevProb);
+    const kind = classifyBall(cur);
 
-    // Boost wickets and boundaries priority
-    const priorityBoost = cur.wicket ? 0.25 : (cur.runs >= 6 ? 0.15 : (cur.runs >= 4 ? 0.08 : 0));
+    const priorityBoost = kind === "wicket" ? 0.25 : (kind === "six" ? 0.15 : (kind === "four" ? 0.08 : 0));
     candidates.push({
       ball: cur,
       prevProb,
       delta: delta + priorityBoost,
+      kind,
     });
   }
 
-  // Sort descending by swing impact
   candidates.sort((a, b) => b.delta - a.delta);
-
   const selected = candidates.slice(0, maxMoments);
 
-  return selected.map(({ ball, prevProb }) => {
+  return selected.map(({ ball, prevProb, kind }) => {
     let label: TurningPointMoment["label"] = "CRITICAL MOMENT";
     let desc = ball.commentary;
     let impact = "Shifted the match momentum significantly.";
 
-    if (ball.wicket) {
+    if (kind === "wicket") {
       label = "WICKET";
       desc = `${ball.dismissedPlayer || ball.batter} dismissed (${ball.wicketType || "out"}).`;
       impact = `Major breakthrough for the bowling attack. Win probability dropped to ${formatWinProb(ball.winProbability)}.`;
-    } else if (ball.runs >= 6) {
+    } else if (kind === "six") {
       label = "SIX";
       desc = `Massive SIX by ${ball.batter} off ${ball.bowler}.`;
-      impact = `Counter-attacking blow that injected vital momentum into the chase.`;
-    } else if (ball.runs >= 4) {
+      impact = "Counter-attacking blow that injected vital momentum into the chase.";
+    } else if (kind === "four") {
       label = "BOUNDARY";
       desc = `Boundary struck by ${ball.batter} off ${ball.bowler}.`;
-      impact = `Relieved required-rate pressure.`;
+      impact = "Relieved required-rate pressure.";
     }
 
     return {
@@ -159,10 +180,6 @@ export function getTopMomentsFallback(balls: Ball[], maxMoments = 3): TurningPoi
   });
 }
 
-/**
- * Calculates aggregate statistics for a slice of balls.
- * Note: runRate is returned as a number to eliminate string comparison bugs.
- */
 export function calculateOverStats(balls: Ball[]) {
   if (!balls || balls.length === 0) {
     return {
@@ -183,9 +200,10 @@ export function calculateOverStats(balls: Ball[]) {
 
   balls.forEach(b => {
     runs += b.runs;
-    if (b.wicket) wickets++;
-    if (b.runs >= 4 && b.runs < 6) fours++;
-    if (b.runs >= 6) sixes++;
+    const kind = classifyBall(b);
+    if (kind === "wicket") wickets++;
+    else if (kind === "four") fours++;
+    else if (kind === "six") sixes++;
   });
 
   const oversCount = balls.length / 6;
@@ -197,14 +215,11 @@ export function calculateOverStats(balls: Ball[]) {
     boundaries: fours,
     sixes,
     totalBalls: balls.length,
-    runRate, // number
-    runRateFormatted: runRate.toFixed(2), // formatted string
+    runRate,
+    runRateFormatted: runRate.toFixed(2),
   };
 }
 
-/**
- * Verifies that all players and over numbers in the moments exist in the actual ball data
- */
 export function validateRecapAgainstBallData(
   moments: TurningPointMoment[],
   balls: Ball[]
@@ -236,9 +251,6 @@ export function validateRecapAgainstBallData(
   };
 }
 
-/**
- * Calculates Dream11 fantasy team impact for the fan's captain & vice-captain during the missed phase.
- */
 export function calculateFantasyPerformance(
   balls: Ball[],
   captainName = "Hardik Pandya",
@@ -248,29 +260,27 @@ export function calculateFantasyPerformance(
   let vcRuns = 0, vcFours = 0, vcSixes = 0, vcWickets = 0, vcOut = false;
 
   balls.forEach(b => {
-    // Captain
+    const kind = classifyBall(b);
     if (b.batter === captainName) {
-      capRuns += b.batterRuns;
-      if (b.batterRuns === 4) capFours++;
-      if (b.batterRuns === 6) capSixes++;
+      capRuns += b.runs;
+      if (kind === "four") capFours++;
+      if (kind === "six") capSixes++;
     }
     if (b.dismissedPlayer === captainName) capOut = true;
 
-    // VC
     if (b.batter === vcName) {
-      vcRuns += b.batterRuns;
-      if (b.batterRuns === 4) vcFours++;
-      if (b.batterRuns === 6) vcSixes++;
+      vcRuns += b.runs;
+      if (kind === "four") vcFours++;
+      if (kind === "six") vcSixes++;
     }
     if (b.dismissedPlayer === vcName) vcOut = true;
   });
 
-  // Dream11 scoring rules: Runs (+1), Fours (+1 bonus), Sixes (+2 bonus), Duck (-2)
   const capRaw = capRuns + (capFours * 1) + (capSixes * 2) + (capOut && capRuns === 0 ? -2 : 0);
   const vcRaw = vcRuns + (vcFours * 1) + (vcSixes * 2) + (vcOut && vcRuns === 0 ? -2 : 0);
 
-  const capPts = Math.round(capRaw * 2); // 2x multiplier for captain
-  const vcPts = Math.round(vcRaw * 1.5); // 1.5x multiplier for vice-captain
+  const capPts = Math.round(capRaw * 2);
+  const vcPts = Math.round(vcRaw * 1.5);
   const totalPhase = capPts + vcPts;
 
   let capSummary = `${captainName}: ${capRuns} runs (${capSixes} sixes, ${capFours} fours)`;
@@ -278,7 +288,7 @@ export function calculateFantasyPerformance(
   else if (capRuns > 0) capSummary = `Captain contributed ${capRuns} crucial runs (+${capPts} pts)`;
 
   let vcSummary = `${vcName}: ${vcRuns} runs (+${vcPts} pts)`;
-  if (vcOut && vcRuns === 0) vcSummary = `Vice-Captain dismissed for a duck (-2 pts)`;
+  if (vcOut && vcRuns === 0) vcSummary = "Vice-Captain dismissed for a duck (-2 pts)";
   else if (vcOut) vcSummary = `Vice-Captain fell after making ${vcRuns} runs (+${vcPts} pts)`;
 
   const rankBefore = totalPhase >= 30 ? "2.3L" : "1.8L";
@@ -314,9 +324,6 @@ export function calculateFantasyPerformance(
   };
 }
 
-/**
- * Computes a spoiler-free thrill rating for fans who missed the whole match or phase.
- */
 export function computeThrillRating(balls: Ball[]): ThrillRating {
   if (!balls || balls.length === 0) {
     return { rating: 8.5, verdict: "Competitive match with good phase battles", worthReplay: true };
@@ -340,9 +347,6 @@ export function computeThrillRating(balls: Ball[]): ThrillRating {
   };
 }
 
-/**
- * Forward-looking "What to watch next" card: matchup, equation, upcoming bowler.
- */
 export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta): WhatToWatchNext {
   const ballsCompleted = (lastBall.over * 6) + lastBall.ball;
   const ballsRemaining = Math.max(0, (meta.totalOvers * 6) - ballsCompleted);
