@@ -10,17 +10,18 @@ export async function GET(req: NextRequest) {
   const indexStr = searchParams.get("index");
   const token = searchParams.get("token") || req.headers.get("x-simulator-token");
 
-  if (!indexStr || isNaN(Number(indexStr))) {
+  const parsedNum = Number(indexStr);
+  if (!indexStr || isNaN(parsedNum) || !Number.isInteger(parsedNum) || parsedNum < 0) {
     return NextResponse.json(
       {
         success: false,
-        error: { code: "INVALID_INDEX", message: "index parameter is required.", retryable: false },
+        error: { code: "INVALID_INDEX", message: "index must be a valid non-negative integer.", retryable: false },
       },
       { status: 400 }
     );
   }
 
-  const requestedIndex = Number(indexStr);
+  const requestedIndex = parsedNum;
 
   // Authorize delivery against server live simulation clock
   const result = getNextSimulatedBall(matchId, token, requestedIndex);

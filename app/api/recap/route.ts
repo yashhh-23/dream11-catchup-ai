@@ -11,11 +11,40 @@ import { buildRecapPrompt } from "@/lib/promptBuilder";
 import { callGroqRecap } from "@/lib/groqClient";
 import { ApiResponse, RecapPayload, SpoilerLevel } from "@/types";
 
-// In-Memory cache for ultra-fast <5ms retrieval
-const recapCache = new Map<string, RecapPayload>();
+export const maxDuration = 15;
+export const dynamic = "force-dynamic";
+
+// Bounded in-memory cache with eviction to prevent unbounded memory growth (Bug 7)
+const MAX_CACHE_SIZE = 120;
+const recapCache = new Map<string, { payload: RecapPayload; usedFallback: boolean }>();
 
 // In-flight request map for de-duplicating concurrent identical calls
-const inFlightRequests = new Map<string, Promise<RecapPayload>>();
+const inFlightRequests = new Map<string, Promise<{ payload: RecapPayload; usedFallback: boolean }>>();
+
+// Sliding-window rate limiter (Bug 7): Max 40 requests per minute per IP / token
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+
+function checkRateLimit(clientKey: string): boolean {
+  const now = Date.now();
+  const record = rateLimitMap.get(clientKey);
+  if (!record || now > record.resetTime) {
+    rateLimitMap.set(clientKey, { count: 1, resetTime: now + 60000 });
+    return true;
+  }
+  if (record.count >= 40) {
+    return false;
+  }
+  record.count++;
+  return true;
+}
+
+function setBoundedCache(key: string, value: { payload: RecapPayload; usedFallback: boolean }) {
+  if (recapCache.size >= MAX_CACHE_SIZE) {
+    const firstKey = recapCache.keys().next().value;
+    if (firstKey) recapCache.delete(firstKey);
+  }
+  recapCache.set(key, value);
+}
 
 function errorResponse(code: string, message: string, status: number) {
   const errRes: ApiResponse<null> = {
@@ -26,22 +55,68 @@ function errorResponse(code: string, message: string, status: number) {
 }
 
 export async function POST(req: NextRequest) {
+  // 1. Safe JSON parsing with 400 response on invalid JSON (Bug 8)
+  let body: any;
   try {
-    const body = await req.json();
+    body = await req.json();
+  } catch {
+    return errorResponse("INVALID_JSON", "Request body must be valid JSON.", 400);
+  }
+
+  try {
     const { 
       matchId, 
       fromOver, 
       toOver, 
       spoilerLevel = "story-and-score", 
       language = "en",
+      isWholeMatch = false,
+      fantasySelection,
     } = body;
 
-    // Use strictly public balls up to liveBallIndex to guarantee zero future ball leaks
-    const { meta, balls } = getServerMatchById(matchId, true);
+    // 2. Validate client rate limit (Bug 7)
+    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "global-client";
+    if (!checkRateLimit(clientIp)) {
+      return errorResponse("RATE_LIMIT_EXCEEDED", "Too many requests. Please slow down.", 429);
+    }
 
-    // Validation: Type & bounds checks
-    if (typeof fromOver !== "number" || typeof toOver !== "number") {
+    // 3. Validate match exists with 404 on unknown matchId (Bug 8)
+    const match = getServerMatchById(matchId, true);
+    if (!match) {
+      return errorResponse("MATCH_NOT_FOUND", `Match "${matchId}" not found.`, 404);
+    }
+    const { meta, balls } = match;
+
+    // 4. Validate spoilerLevel and language (Bug 7)
+    const VALID_SPOILER_LEVELS = new Set(["story-only", "story-and-score", "full"]);
+    if (spoilerLevel && !VALID_SPOILER_LEVELS.has(spoilerLevel)) {
+      return errorResponse("INVALID_INPUT", "spoilerLevel must be 'story-only', 'story-and-score', or 'full'.", 400);
+    }
+
+    const VALID_LANGUAGES = new Set(["en", "hinglish"]);
+    if (language && !VALID_LANGUAGES.has(language)) {
+      return errorResponse("INVALID_INPUT", "language must be 'en' or 'hinglish'.", 400);
+    }
+
+    // 5. Over bounds & cricket format checks (Bug 9)
+    if (typeof fromOver !== "number" || typeof toOver !== "number" || isNaN(fromOver) || isNaN(toOver)) {
       return errorResponse("INVALID_INPUT", "fromOver and toOver must be valid numbers.", 400);
+    }
+
+    // fromOver must be an integer completed over (e.g. 0 to 19)
+    if (!Number.isInteger(fromOver) || fromOver < 0 || fromOver >= meta.totalOvers) {
+      return errorResponse("INVALID_OVER", `fromOver must be an integer between 0 and ${meta.totalOvers - 1}.`, 400);
+    }
+
+    // toOver must be a valid cricket delivery: integer or decimal with fraction between .1 and .6
+    const toCompleted = Math.floor(toOver);
+    const toFraction = Math.round((toOver - toCompleted) * 10);
+    if (toOver <= 0 || toCompleted > meta.totalOvers || toFraction > 6 || (toCompleted === meta.totalOvers && toFraction > 0)) {
+      return errorResponse(
+        "INVALID_OVER", 
+        `toOver (${toOver}) is not a valid cricket over. Deliveries must be between .1 and .6 (e.g. 14.2).`, 
+        400
+      );
     }
 
     // Zero-Spoiler enforcement: Do not allow asking for overs past the live match cutoff
@@ -54,42 +129,49 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (fromOver < 0 || toOver > meta.totalOvers) {
-      return errorResponse("OUT_OF_BOUNDS", `Overs must be within 0 to ${meta.totalOvers}.`, 400);
-    }
-
     if (fromOver >= toOver) {
       return errorResponse("INVALID_RANGE", "Start over must be strictly less than end over.", 400);
     }
 
-    // Cache key for prefetching and instant response
-    const cacheKey = `${meta.matchId}:${fromOver}:${toOver}:${spoilerLevel}:${language}`;
+    const toDisplay = toFraction > 0 ? Number(toOver.toFixed(1)) : toCompleted;
+    const normalizedSpoilerLevel = spoilerLevel as SpoilerLevel;
+
+    // 6. Cache key: Normalized per match, window and spoilerLevel (Bug 7)
+    const cacheKey = `${meta.matchId}:${fromOver}:${toDisplay}:${normalizedSpoilerLevel}`;
     if (recapCache.has(cacheKey)) {
+      const cachedEntry = recapCache.get(cacheKey)!;
       const res: ApiResponse<RecapPayload> = {
         success: true,
-        data: recapCache.get(cacheKey)!,
+        data: cachedEntry.payload,
         meta: {
           matchId: meta.matchId,
-          usedFallback: false,
+          usedFallback: cachedEntry.usedFallback,
           cached: true,
-          oversCovered: `Overs ${fromOver + 1} – ${toOver}`,
+          oversCovered: `Overs ${fromOver + 1} – ${toDisplay}`,
         }
       };
-      return NextResponse.json(res);
+      return NextResponse.json(res, {
+        headers: {
+          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+        },
+      });
     }
 
-    // Check if an identical request is already running (in-flight de-duplication)
+    // In-flight de-duplication
     let executionPromise = inFlightRequests.get(cacheKey);
 
     if (!executionPromise) {
-      executionPromise = (async (): Promise<RecapPayload> => {
-        // Single-pass fused processing: O(k) slicing, stats, running top 3, and player extraction
+      executionPromise = (async (): Promise<{ payload: RecapPayload; usedFallback: boolean }> => {
+        let isFallbackUsed = false;
+
+        // Fused processing: O(k) slicing with preceding-ball probability (Bug 14)
         const {
           missedBalls,
           stats,
           topMoments: computedMoments,
           battersInPhase,
           dismissedInPhase,
+          initialPrevProb,
         } = processWindowFused(balls, fromOver, toOver);
 
         if (missedBalls.length === 0) {
@@ -97,11 +179,8 @@ export async function POST(req: NextRequest) {
         }
 
         const fromDisplay = fromOver + 1;
-        const toDisplay = typeof toOver === "number" && toOver % 1 !== 0 
-          ? Number(toOver.toFixed(1)) 
-          : toOver;
 
-        // Dynamic phase calculation at the exact end of missed window
+        // Phase end stats
         const lastBall = missedBalls[missedBalls.length - 1];
         const scoreAtPhaseEnd = lastBall.cumulativeScore;
         const wicketsAtPhaseEnd = lastBall.cumulativeWickets;
@@ -110,16 +189,18 @@ export async function POST(req: NextRequest) {
         const runsNeededAtPhaseEnd = Math.max(0, meta.target - scoreAtPhaseEnd);
         const wicketsInHandAtPhaseEnd = 10 - wicketsAtPhaseEnd;
 
-        // Dream11 Fantasy Team Performance (Captain Hardik, VC Rohit)
-        const fantasyImpact = calculateFantasyPerformance(missedBalls, "Hardik Pandya", "Rohit Sharma");
+        // Fantasy team performance (Bug 16: supports dynamic captain/VC selection, excludes run-outs from bowler)
+        const capName = fantasySelection?.captain || "Hardik Pandya";
+        const vcName = fantasySelection?.viceCaptain || "Rohit Sharma";
+        const fantasyImpact = calculateFantasyPerformance(missedBalls, capName, vcName);
 
-        // Thrill Rating
-        const thrillRating = computeThrillRating(missedBalls);
+        // Thrill Rating (Bug 14: uses initialPrevProb for first-ball swing)
+        const thrillRating = computeThrillRating(missedBalls, initialPrevProb);
 
-        // Forward-Looking "What to watch next" card
-        const whatToWatchNext = getWhatToWatchNext(lastBall, meta);
+        // Forward-looking "What to watch next" card (Bug 17: dynamic non-striker & spell phase)
+        const whatToWatchNext = getWhatToWatchNext(lastBall, meta, balls);
 
-        // Determine mood
+        // Calculate default mood
         let calculatedMood: RecapPayload["mood"] = "Knife's edge";
         if (stats.runs >= 35 && stats.wickets <= 1) {
           calculatedMood = "Cruising";
@@ -138,7 +219,8 @@ export async function POST(req: NextRequest) {
             fromDisplay, 
             toDisplay, 
             computedMoments,
-            spoilerLevel as SpoilerLevel
+            normalizedSpoilerLevel,
+            Boolean(isWholeMatch)
           );
           const rawResponse = await callGroqRecap(prompt);
           const parsed = JSON.parse(rawResponse);
@@ -153,23 +235,28 @@ export async function POST(req: NextRequest) {
               };
             });
 
+            // Comprehensive validation guardrail covering moments, narrative & mood (Bug 11)
             const validation = validateRecapAgainstBallData(
-              { oneLiner: parsed.oneLiner, story: parsed.story, top3Moments: finalMoments },
-              missedBalls
+              { oneLiner: parsed.oneLiner, story: parsed.story, top3Moments: finalMoments, mood: parsed.mood },
+              missedBalls,
+              toDisplay
             );
+
+            const ALLOWED_MOODS = new Set(["Cruising", "Knife's edge", "Chasing hard", "Game over", "Comeback on"]);
+            const validatedMood = (parsed.mood && ALLOWED_MOODS.has(parsed.mood)) ? parsed.mood : calculatedMood;
 
             if (validation.valid) {
               recapPayload = {
                 oneLiner: parsed.oneLiner,
                 story: parsed.story,
                 top3Moments: finalMoments,
-                mood: parsed.mood || calculatedMood,
+                mood: validatedMood,
                 partnershipSummary: parsed.partnershipSummary || `${battersInPhase.slice(0, 2).join(" & ")} anchored this chase phase.`,
                 oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
                 fantasyImpact,
                 thrillRating,
                 whatToWatchNext,
-                spoilerLevel: spoilerLevel as SpoilerLevel,
+                spoilerLevel: normalizedSpoilerLevel,
               };
             }
           }
@@ -177,13 +264,13 @@ export async function POST(req: NextRequest) {
           console.warn("Groq inference skipped or failed, using local fallback engine:", err?.message || err);
         }
 
-        // Batters involved in this phase
         const battersSummary = battersInPhase.length > 0 
           ? battersInPhase.join(" and ") 
           : "the middle order";
 
-        // Offline deterministic fallback
+        // Offline deterministic fallback (Bug 10: correctly sets isFallbackUsed = true)
         if (!recapPayload) {
+          isFallbackUsed = true;
           const wicketsText = stats.wickets === 1 
             ? "1 wicket" 
             : `${stats.wickets} wickets`;
@@ -193,25 +280,23 @@ export async function POST(req: NextRequest) {
           let storySummary: string;
           let headlineText: string;
 
-          if (spoilerLevel === "story-only") {
-            // Level 1: Redact all numerical scores from story and headline
-            storySummary = `Between overs ${fromDisplay} and ${toDisplay}, India navigated a high-stakes phase. ${battersSummary} absorbed intense pressure against the spinners and counter-attacked with key boundaries to relieve the required-rate climb. As the match reaches over ${toDisplay}, the middle order has stabilized the chase and set up a thrilling finish heading into live action.`;
-            headlineText = `You missed the chaos! Crucial wickets shook India early, but the middle order counter-punched fearlessly!`;
+          if (normalizedSpoilerLevel === "story-only") {
+            storySummary = `Between overs ${fromDisplay} and ${toDisplay}, ${meta.team2} navigated a high-stakes phase. ${battersSummary} absorbed pressure and counter-attacked with key boundaries to keep the run-chase alive. As the match reaches over ${toDisplay}, the partnership has stabilized the innings heading into live action.`;
+            headlineText = `You missed the chaos! Wickets shook the top order early, but ${meta.team2}'s middle order counter-punched fearlessly!`;
           } else {
-            // Level 2 & 3: Include score at the phase end
             if (runsNeededAtPhaseEnd <= 0) {
-              storySummary = `India chased down the target with a relentless counter-attack, finishing the match in style.`;
+              storySummary = `${meta.team2} chased down the target of ${meta.target} with a relentless counter-attack, finishing the match in style.`;
             } else {
-              storySummary = `Between overs ${fromDisplay} and ${toDisplay}, India scored ${stats.runs} runs for the loss of ${wicketsText}. ${battersSummary} absorbed pressure and countered with ${boundarySummary}. At over ${toDisplay}, India stand at ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}, needing ${runsNeededAtPhaseEnd} runs from the remaining ${ballsRemainingAtPhaseEnd} deliveries with ${wicketsInHandAtPhaseEnd} wickets in hand.`;
+              storySummary = `Between overs ${fromDisplay} and ${toDisplay}, ${meta.team2} scored ${stats.runs} runs for the loss of ${wicketsText}. ${battersSummary} absorbed pressure and countered with ${boundarySummary}. At over ${toDisplay}, ${meta.team2} stand at ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}, needing ${runsNeededAtPhaseEnd} runs from the remaining ${ballsRemainingAtPhaseEnd} deliveries with ${wicketsInHandAtPhaseEnd} wickets in hand.`;
             }
 
             if (stats.wickets >= 2) {
               const dismissedNames = dismissedInPhase.slice(0, 2).join(" and ");
-              headlineText = `You missed the chaos! NZ struck to remove ${dismissedNames || "key batters"}, but India fought back to ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}.`;
+              headlineText = `You missed the chaos! ${meta.team1} struck to remove ${dismissedNames || "key batters"}, but ${meta.team2} fought back to ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}.`;
             } else if (stats.runs >= 30) {
-              headlineText = `India went on the offensive! ${stats.runs} runs hammered in ${stats.totalBalls} balls to seize control of the chase.`;
+              headlineText = `${meta.team2} went on the offensive! ${stats.runs} runs hammered in ${stats.totalBalls} balls to seize control of the chase.`;
             } else {
-              headlineText = `Tense tactical battle! India reached ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} through tight spells and sharp running.`;
+              headlineText = `Tense tactical battle! ${meta.team2} reached ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} through tight spells and sharp running.`;
             }
           }
 
@@ -225,67 +310,71 @@ export async function POST(req: NextRequest) {
             fantasyImpact,
             thrillRating,
             whatToWatchNext,
-            spoilerLevel: spoilerLevel as SpoilerLevel,
+            spoilerLevel: normalizedSpoilerLevel,
           };
         }
 
         // Server-side Redaction for "story-only" spoiler level
-        if (spoilerLevel === "story-only") {
-          recapPayload.oneLiner = `You missed the chaos! Crucial wickets shook India early, but the middle order counter-punched fearlessly!`;
-          recapPayload.story = `Between overs ${fromDisplay} and ${toDisplay}, India navigated a high-stakes phase. ${battersSummary} absorbed pressure against the spinners and counter-attacked with key boundaries to keep required-rate pressure in check. As the match reaches over ${toDisplay}, the partnership has stabilized the chase and set up a competitive finish heading into the live action.`;
+        if (normalizedSpoilerLevel === "story-only") {
+          recapPayload.oneLiner = `You missed the chaos! Crucial wickets shook the top order early, but the middle order counter-punched fearlessly!`;
+          recapPayload.story = `Between overs ${fromDisplay} and ${toDisplay}, ${meta.team2} navigated a high-stakes phase. ${battersSummary} absorbed pressure against the bowling attack and counter-attacked with key boundaries to keep required-rate pressure in check. As the match reaches over ${toDisplay}, the partnership has stabilized the chase heading into live action.`;
           
           if (recapPayload.whatToWatchNext) {
-            recapPayload.whatToWatchNext.equation = `Chasing in the death overs with established middle-order strikers at the crease.`;
+            recapPayload.whatToWatchNext.equation = `Chasing in the active phase with middle-order strikers at the crease.`;
           }
         }
 
-        // Dynamic Hinglish commentary
+        // Dynamic Hinglish commentary (Bug 18: dynamic team names, no hardcoded NZ/India)
         let hinglishHeadline: string;
         let hinglishNarrative: string;
 
-        if (spoilerLevel === "story-only") {
-          hinglishHeadline = `Bhai bawal match chal raha hai! NZ ne wickets gira ke pressure banaya, par Indian batters ne stadium hila ke momentum badal diya!`;
-          hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke dauran NZ ke spinners ne bawal bowling ki, par ${battersSummary} ne counter-attack karke match ko barabari par laa khada kiya. Ab live phase mein sab kuch thrilling mod par hai!`;
+        if (normalizedSpoilerLevel === "story-only") {
+          hinglishHeadline = `Bhai bawal match chal raha hai! ${meta.team1} ne wickets gira ke pressure banaya, par ${meta.team2} ne counter-attack karke momentum badal diya!`;
+          hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke dauran ${meta.team1} ke bowling attack ne bawal bowling ki, par ${battersSummary} ne counter-attack karke match ko barabari par laa khada kiya. Ab live phase mein sab kuch thrilling mod par hai!`;
         } else {
           if (stats.wickets >= 2) {
-            hinglishHeadline = `Bhai bawal match miss kar diya! NZ ne jhatke diye par India ne ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} tak counter-punch kar diya!`;
+            hinglishHeadline = `Bhai bawal match miss kar diya! ${meta.team1} ne jhatke diye par ${meta.team2} ne ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} tak counter-punch kar diya!`;
           } else if (stats.runs >= 30) {
-            hinglishHeadline = `Bhai kya dhulai chal rahi hai! India ne ${stats.totalBalls} balls mein ${stats.runs} runs thok ke match apne pakad mein kar liya!`;
+            hinglishHeadline = `Bhai kya dhulai chal rahi hai! ${meta.team2} ne ${stats.totalBalls} balls mein ${stats.runs} runs thok ke match apne pakad mein kar liya!`;
           } else {
-            hinglishHeadline = `Tense run-chase chal raha hai bhai! India ne boundary aur sharp running se score ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} pahuncha diya.`;
+            hinglishHeadline = `Tense run-chase chal raha hai bhai! ${meta.team2} ne boundary aur sharp running se score ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} pahuncha diya.`;
           }
 
           if (runsNeededAtPhaseEnd <= 0) {
-            hinglishNarrative = `India ne match ko zabardast andaaz mein finish kar diya!`;
+            hinglishNarrative = `${meta.team2} ne match ko zabardast andaaz mein finish kar diya!`;
           } else {
-            hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke beech India ne ${stats.runs} runs banaye ${stats.wickets > 0 ? `${stats.wickets} wicket kho kar` : `bina wicket khoye`}. ${battersSummary} ne ${stats.boundaries} chauke aur ${stats.sixes} chakke jad kar pressure release kiya. Ab over ${toDisplay} par score hai ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}, aur jeet ke liye chahiye ${runsNeededAtPhaseEnd} runs ${ballsRemainingAtPhaseEnd} balls mein!`;
+            hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke beech ${meta.team2} ne ${stats.runs} runs banaye ${stats.wickets > 0 ? `${stats.wickets} wicket kho kar` : `bina wicket khoye`}. ${battersSummary} ne ${stats.boundaries} chauke aur ${stats.sixes} chakke jad kar pressure release kiya. Ab over ${toDisplay} par score hai ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}, aur jeet ke liye chahiye ${runsNeededAtPhaseEnd} runs ${ballsRemainingAtPhaseEnd} balls mein!`;
           }
         }
 
         recapPayload.hinglishOneLiner = hinglishHeadline;
         recapPayload.hinglishStory = hinglishNarrative;
 
-        // Cache completed result
-        recapCache.set(cacheKey, recapPayload);
-        return recapPayload;
+        const result = { payload: recapPayload, usedFallback: isFallbackUsed };
+        setBoundedCache(cacheKey, result);
+        return result;
       })();
 
       inFlightRequests.set(cacheKey, executionPromise);
     }
 
     try {
-      const payload = await executionPromise;
+      const { payload, usedFallback } = await executionPromise;
       const res: ApiResponse<RecapPayload> = {
         success: true,
         data: payload,
         meta: {
           matchId: meta.matchId,
-          usedFallback: false,
+          usedFallback, // Correct boolean status (Bug 10)
           cached: false,
-          oversCovered: `Overs ${fromOver + 1} – ${toOver}`,
+          oversCovered: `Overs ${fromOver + 1} – ${toDisplay}`,
         }
       };
-      return NextResponse.json(res);
+      return NextResponse.json(res, {
+        headers: {
+          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600", // Edge cache optimization (Bug 13)
+        },
+      });
     } finally {
       inFlightRequests.delete(cacheKey);
     }

@@ -2,7 +2,11 @@ import { CatchUpFlow } from "@/components/CatchUpFlow";
 import { getPublicMatchData } from "@/lib/serverMatchData";
 
 export default function Home() {
-  const { meta, balls, sessionToken } = getPublicMatchData();
+  const matchData = getPublicMatchData();
+  if (!matchData) {
+    throw new Error("Default match data not found");
+  }
+  const { meta, balls, sessionToken } = matchData;
 
   return (
     <CatchUpFlow

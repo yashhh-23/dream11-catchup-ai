@@ -15,7 +15,12 @@ function getGroqClient(apiKey: string): Groq {
   return groqSingleton;
 }
 
-export async function callGroqRecap(prompt: string, maxRetries = 2, timeoutMs = 3000): Promise<string> {
+export async function callGroqRecap(
+  prompt: string,
+  maxRetries = 2,
+  attemptTimeoutMs = 2500,
+  totalDeadlineMs = 5000
+): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("GROQ_API_KEY_MISSING");
@@ -23,11 +28,21 @@ export async function callGroqRecap(prompt: string, maxRetries = 2, timeoutMs = 
 
   const groq = getGroqClient(apiKey);
   let modelIndex = 0;
+  const startTime = Date.now();
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const elapsed = Date.now() - startTime;
+    const remainingTime = totalDeadlineMs - elapsed;
+
+    // If total deadline is nearly exhausted, stop immediately to allow offline fallback
+    if (remainingTime < 800) {
+      throw new Error("GROQ_TOTAL_DEADLINE_EXCEEDED");
+    }
+
+    const currentTimeout = Math.min(attemptTimeoutMs, remainingTime);
     const chosenModel = GROQ_MODELS[modelIndex];
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), currentTimeout);
 
     try {
       const completion = await groq.chat.completions.create(
@@ -59,6 +74,15 @@ export async function callGroqRecap(prompt: string, maxRetries = 2, timeoutMs = 
     } catch (error: any) {
       console.warn(`Groq API attempt ${attempt + 1} with model ${chosenModel} failed:`, error?.message || error);
 
+      // Check for non-retryable errors (400, 401 Unauthorized, 403 Forbidden, 404)
+      const status = error?.status || error?.statusCode;
+      const isAuthOrClientError = status === 400 || status === 401 || status === 403 || status === 404;
+      const isMissingKey = error?.message?.includes("API key") || error?.message?.includes("invalid_api_key");
+
+      if (isAuthOrClientError || isMissingKey) {
+        throw error; // Do not retry fatal non-retryable client/auth errors
+      }
+
       // Walk sequentially to the next model in the pool
       modelIndex = (modelIndex + 1) % GROQ_MODELS.length;
 
@@ -66,9 +90,11 @@ export async function callGroqRecap(prompt: string, maxRetries = 2, timeoutMs = 
         throw error;
       }
 
-      // Exponential backoff delay (250ms, 500ms)
-      const delayMs = 250 * Math.pow(2, attempt);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      // Exponential backoff delay (150ms, 300ms) capped by remaining deadline
+      const delayMs = Math.min(150 * Math.pow(2, attempt), Math.max(0, totalDeadlineMs - (Date.now() - startTime) - 500));
+      if (delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     } finally {
       clearTimeout(timer);
     }

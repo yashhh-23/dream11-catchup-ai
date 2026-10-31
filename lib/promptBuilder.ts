@@ -13,7 +13,8 @@ export function buildRecapPrompt(
   fromOverDisplay: number,
   toOverDisplay: number | string,
   computedMoments: TurningPointMoment[],
-  spoilerLevel: SpoilerLevel = "story-and-score"
+  spoilerLevel: SpoilerLevel = "story-and-score",
+  isWholeMatch: boolean = false
 ): string {
   // Group balls by over to compress quiet spells
   const overBuckets: Record<number, Ball[]> = {};
@@ -31,25 +32,25 @@ export function buildRecapPrompt(
     const hasExcitement = overDeliveries.some(b => b.wicket || b.runs >= 4);
 
     if (!hasExcitement) {
-      // Quiet over: aggregate runs and dots
+      // Quiet over: aggregate runs and dots using consistent 0-based over label
       const overRuns = overDeliveries.reduce((sum, b) => sum + b.runs, 0);
       const bowler = overDeliveries[0].bowler;
       const runsSequence = overDeliveries.map(b => b.runs).join(", ");
       const lastProb = Math.round(overDeliveries[overDeliveries.length - 1].winProbability * 100);
-      lines.push(`Over ${overNum + 1} (${bowler}): ${overRuns} runs [${runsSequence}] | WinProb: ${lastProb}%`);
+      lines.push(`Over ${overNum} (${bowler}): ${overRuns} runs [${runsSequence}] | WinProb: ${lastProb}%`);
     } else {
-      // Eventful over: emit each key ball and concise dots/singles
+      // Eventful over: emit each key ball with matching Over notation
       for (let i = 0; i < overDeliveries.length; i++) {
         const b = overDeliveries[i];
         const kind = classifyBall(b);
         if (kind === "wicket") {
-          lines.push(`O${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | WICKET (${b.wicketType || 'out'} - ${b.dismissedPlayer || b.batter}) | WP: ${Math.round(b.winProbability * 100)}%`);
+          lines.push(`Over ${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | WICKET (${b.wicketType || 'out'} - ${b.dismissedPlayer || b.batter}) | WP: ${Math.round(b.winProbability * 100)}%`);
         } else if (kind === "six") {
-          lines.push(`O${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | SIX! | WP: ${Math.round(b.winProbability * 100)}%`);
+          lines.push(`Over ${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | SIX! | WP: ${Math.round(b.winProbability * 100)}%`);
         } else if (kind === "four") {
-          lines.push(`O${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | FOUR! | WP: ${Math.round(b.winProbability * 100)}%`);
+          lines.push(`Over ${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | FOUR! | WP: ${Math.round(b.winProbability * 100)}%`);
         } else {
-          lines.push(`O${b.over}.${b.ball}: ${b.runs}r`);
+          lines.push(`Over ${b.over}.${b.ball}: ${b.runs}r`);
         }
       }
     }
@@ -57,8 +58,9 @@ export function buildRecapPrompt(
 
   const compressedBalls = lines.join("\n");
 
-  const startScore = balls[0].cumulativeScore;
-  const startWickets = balls[0].cumulativeWickets;
+  // Correct startScore to reflect score before the first ball of the window
+  const startScore = balls[0].cumulativeScore - balls[0].runs;
+  const startWickets = balls[0].cumulativeWickets - (balls[0].wicket ? 1 : 0);
   const endScore = balls[balls.length - 1].cumulativeScore;
   const endWickets = balls[balls.length - 1].cumulativeWickets;
 
@@ -74,8 +76,12 @@ export function buildRecapPrompt(
     ? `5. ZERO-SPOILER RULE: DO NOT write any numerical scores, runs needed, or delivery counts (e.g. no specific scorelines like 100/2 or run equations). Describe purely the narrative flow, pitch pressure, wickets, boundaries, and momentum.`
     : `5. DO NOT reveal any events after over ${toOverDisplay}.`;
 
+  const matchScopeContext = isWholeMatch
+    ? `The fan missed the full match from ball 1. Provide an end-to-end full match arc summary.`
+    : `The fan missed Overs ${fromOverDisplay} to ${toOverDisplay}.`;
+
   return `You are Rhea AI, Dream11's cricket-obsessed companion texting a fan who just joined the match late.
-The fan missed Overs ${fromOverDisplay} to ${toOverDisplay}.
+${matchScopeContext}
 Match: ${meta.team2} chasing against ${meta.team1} (${meta.format} at ${meta.venue}).
 ${scoreContext}
 

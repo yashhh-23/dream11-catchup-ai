@@ -160,14 +160,20 @@ interface MomentCandidate {
  * Computes top turning point moments in O(k) time and O(1) space
  * using a running fixed-size priority array of length 3.
  */
-export function getTopMomentsFallback(balls: Ball[], maxMoments = 3): TurningPointMoment[] {
+export function getTopMomentsFallback(
+  balls: Ball[],
+  maxMoments = 3,
+  initialPrevProb?: number
+): TurningPointMoment[] {
   if (!balls || balls.length === 0) return [];
 
   const top: MomentCandidate[] = [];
 
   for (let i = 0; i < balls.length; i++) {
     const cur = balls[i];
-    const prevProb = i > 0 ? balls[i - 1].winProbability : cur.winProbability;
+    const prevProb = i > 0
+      ? balls[i - 1].winProbability
+      : (initialPrevProb !== undefined ? initialPrevProb : (cur.over === 0 && cur.ball === 1 ? 0.50 : cur.winProbability));
     const delta = Math.abs(cur.winProbability - prevProb);
     const kind = classifyBall(cur);
 
@@ -267,6 +273,12 @@ export function calculateOverStats(balls: Ball[]) {
  * and player extraction in one fused O(k) pass with O(1) extra space.
  */
 export function processWindowFused(balls: Ball[], fromOver: number, toOver: number) {
+  // Find start index in original balls array to identify previous delivery
+  let startIdx = 0;
+  while (startIdx < balls.length && balls[startIdx].over < fromOver) {
+    startIdx++;
+  }
+
   const missedBalls = sliceBalls(balls, fromOver, toOver);
   if (missedBalls.length === 0) {
     return {
@@ -275,11 +287,17 @@ export function processWindowFused(balls: Ball[], fromOver: number, toOver: numb
       topMoments: [],
       battersInPhase: [],
       dismissedInPhase: [],
+      initialPrevProb: 0.50,
     };
   }
 
+  // Preceding ball probability before the window starts (fixes bug 14)
+  const initialPrevProb = startIdx > 0 && balls[startIdx - 1]
+    ? balls[startIdx - 1].winProbability
+    : (missedBalls[0].over === 0 && missedBalls[0].ball === 1 ? 0.50 : missedBalls[0].winProbability);
+
   const stats = calculateOverStats(missedBalls);
-  const topMoments = getTopMomentsFallback(missedBalls, 3);
+  const topMoments = getTopMomentsFallback(missedBalls, 3, initialPrevProb);
 
   const batterSet = new Set<string>();
   const dismissedList: string[] = [];
@@ -298,6 +316,7 @@ export function processWindowFused(balls: Ball[], fromOver: number, toOver: numb
     topMoments,
     battersInPhase: Array.from(batterSet),
     dismissedInPhase: dismissedList,
+    initialPrevProb,
   };
 }
 
@@ -307,7 +326,8 @@ export function processWindowFused(balls: Ball[], fromOver: number, toOver: numb
  */
 export function validateRecapAgainstBallData(
   recap: any,
-  balls: Ball[]
+  balls: Ball[],
+  maxAllowedOver?: number
 ): { valid: boolean; isValid: boolean; issues: string[] } {
   const issues: string[] = [];
   const validOvers = new Set(balls.map(b => formatOver(b.over, b.ball)));
@@ -320,6 +340,13 @@ export function validateRecapAgainstBallData(
     if (b.dismissedPlayer) validPlayers.add(b.dismissedPlayer);
   }
 
+  // Validate allowed mood
+  const ALLOWED_MOODS = new Set(["Cruising", "Knife's edge", "Chasing hard", "Game over", "Comeback on"]);
+  if (recap && typeof recap === "object" && recap.mood && !ALLOWED_MOODS.has(recap.mood)) {
+    issues.push(`Invalid mood "${recap.mood}". Must be one of: Cruising, Knife's edge, Chasing hard, Game over, Comeback on.`);
+  }
+
+  // Inspect moments
   const moments: any[] = Array.isArray(recap) 
     ? recap 
     : (recap?.top3Moments || []);
@@ -331,6 +358,24 @@ export function validateRecapAgainstBallData(
     }
     if (m.player && !validPlayers.has(m.player)) {
       issues.push(`Moment ${idx + 1} references player "${m.player}", who was not part of this window.`);
+    }
+  }
+
+  // Inspect narrative (oneLiner and story) for hallucinated future events or players
+  const textCorpus = `${recap?.oneLiner || ""} ${recap?.story || ""}`;
+  if (textCorpus.trim().length > 0 && balls.length > 0) {
+    const maxBallOver = maxAllowedOver !== undefined ? maxAllowedOver : balls[balls.length - 1].over + (balls[balls.length - 1].ball / 10);
+    const minBallOver = balls[0].over;
+
+    // Check for over mentions like "over 16", "over 15.2", "16th over"
+    const overMatches = textCorpus.matchAll(/\b(?:over|ov)\s*(\d+(\.\d+)?)\b/gi);
+    for (const match of overMatches) {
+      const mentioned = parseFloat(match[1]);
+      if (!isNaN(mentioned)) {
+        if (mentioned > maxBallOver + 0.1 || mentioned < minBallOver) {
+          issues.push(`Narrative references over ${mentioned}, which is outside the allowed window (up to over ${maxBallOver}).`);
+        }
+      }
     }
   }
 
@@ -354,25 +399,40 @@ export function calculateFantasyPerformance(
   let captainFours = 0;
   let captainSixes = 0;
   let captainWickets = 0;
+  let captainBatted = false;
+  let captainDismissed = false;
 
   let vcRuns = 0;
   let vcFours = 0;
   let vcSixes = 0;
   let vcWickets = 0;
+  let vcBatted = false;
+  let vcDismissed = false;
 
   missedBalls.forEach(b => {
     if (b.batter === captainName) {
+      captainBatted = true;
       captainRuns += b.runs;
       if (b.isBoundaryFour || b.runs === 4) captainFours++;
       if (b.isSix || b.runs === 6) captainSixes++;
     }
+    if (b.wicket && (b.dismissedPlayer === captainName || (b.batter === captainName && !b.dismissedPlayer))) {
+      captainDismissed = true;
+    }
+
     if (b.batter === viceCaptainName) {
+      vcBatted = true;
       vcRuns += b.runs;
       if (b.isBoundaryFour || b.runs === 4) vcFours++;
       if (b.isSix || b.runs === 6) vcSixes++;
     }
-    if (b.bowler === captainName && b.wicket) captainWickets++;
-    if (b.bowler === viceCaptainName && b.wicket) vcWickets++;
+    if (b.wicket && (b.dismissedPlayer === viceCaptainName || (b.batter === viceCaptainName && !b.dismissedPlayer))) {
+      vcDismissed = true;
+    }
+
+    // Cricket rule: Run-outs are NOT credited to the bowler
+    if (b.bowler === captainName && b.wicket && b.wicketType !== "run out") captainWickets++;
+    if (b.bowler === viceCaptainName && b.wicket && b.wicketType !== "run out") vcWickets++;
   });
 
   const rawCapPoints = (captainRuns * 1) + (captainFours * 1) + (captainSixes * 2) + (captainWickets * 25);
@@ -381,20 +441,45 @@ export function calculateFantasyPerformance(
   const rawVcPoints = (vcRuns * 1) + (vcFours * 1) + (vcSixes * 2) + (vcWickets * 25);
   const vcPoints = Math.round(rawVcPoints * 1.5); // 1.5x multiplier
 
-  const phasePoints = capPoints + vcPoints + (missedBalls.length > 20 ? 32 : 14);
+  const phasePoints = capPoints + vcPoints + (missedBalls.length > 20 ? 18 : 8);
 
-  let rankBefore = "2.3L";
-  let rankAfter = "41K";
-  let rankDirection: "up" | "down" | "same" = "up";
+  // Dynamic rank movement based on points scored in this window
+  const expectedPoints = Math.max(12, Math.round(missedBalls.length * 1.5));
+  let rankBefore = "1.8L";
+  let rankAfter = "1.8L";
+  let rankDirection: "up" | "down" | "same" = "same";
 
-  if (phasePoints >= 70) {
-    rankBefore = "2.8L";
-    rankAfter = "34K";
+  if (phasePoints >= expectedPoints * 1.4) {
+    rankBefore = "2.3L";
+    rankAfter = phasePoints >= 70 ? "38K" : "84K";
     rankDirection = "up";
-  } else if (phasePoints <= 20) {
-    rankBefore = "85K";
-    rankAfter = "1.4L";
+  } else if (phasePoints <= expectedPoints * 0.7) {
+    rankBefore = "82K";
+    rankAfter = "1.5L";
     rankDirection = "down";
+  } else {
+    rankBefore = "1.25L";
+    rankAfter = "1.18L";
+    rankDirection = "same";
+  }
+
+  // Accurate summaries avoiding the false "Dismissed" bug when batter did not bat
+  let capSummary = `${captainRuns} runs (+${capPoints} pts)`;
+  if (captainSixes > 0) {
+    capSummary = `${captainSixes} sixes & ${captainRuns} runs (+${capPoints} pts with 2x)`;
+  } else if (captainDismissed) {
+    capSummary = captainRuns === 0 ? `Dismissed for duck (+${capPoints} pts)` : `Dismissed for ${captainRuns} (+${capPoints} pts with 2x)`;
+  } else if (!captainBatted && captainWickets === 0) {
+    capSummary = `Did not bat in this phase (0 pts)`;
+  }
+
+  let vcSummary = `${vcRuns} runs (+${vcPoints} pts with 1.5x)`;
+  if (vcSixes > 0) {
+    vcSummary = `${vcSixes} sixes & ${vcRuns} runs (+${vcPoints} pts with 1.5x)`;
+  } else if (vcDismissed) {
+    vcSummary = vcRuns === 0 ? `Dismissed for duck (+${vcPoints} pts)` : `Dismissed for ${vcRuns} (+${vcPoints} pts with 1.5x)`;
+  } else if (!vcBatted && vcWickets === 0) {
+    vcSummary = `Did not bat in this phase (0 pts)`;
   }
 
   return {
@@ -407,9 +492,7 @@ export function calculateFantasyPerformance(
       fours: captainFours,
       sixes: captainSixes,
       pointsEarned: capPoints,
-      summary: captainSixes > 0 
-        ? `${captainSixes} sixes & ${captainRuns} runs (+${capPoints} pts with 2x)` 
-        : `${captainRuns} runs (+${capPoints} pts)`,
+      summary: capSummary,
     },
     viceCaptain: {
       name: viceCaptainName,
@@ -419,7 +502,7 @@ export function calculateFantasyPerformance(
       fours: vcFours,
       sixes: vcSixes,
       pointsEarned: vcPoints,
-      summary: vcRuns > 0 ? `${vcRuns} runs (+${vcPoints} pts with 1.5x)` : `Dismissed (+${vcPoints} pts)`,
+      summary: vcSummary,
     },
     phasePoints,
     rankBefore,
@@ -431,7 +514,7 @@ export function calculateFantasyPerformance(
 /**
  * Computes a thriller rating (out of 10) and spoiler-safe verdict.
  */
-export function computeThrillRating(missedBalls: Ball[]): ThrillRating {
+export function computeThrillRating(missedBalls: Ball[], initialPrevProb?: number): ThrillRating {
   if (!missedBalls || missedBalls.length === 0) {
     return {
       rating: 8.0,
@@ -446,7 +529,9 @@ export function computeThrillRating(missedBalls: Ball[]): ThrillRating {
 
   for (let i = 0; i < missedBalls.length; i++) {
     const cur = missedBalls[i];
-    const prevProb = i > 0 ? missedBalls[i - 1].winProbability : cur.winProbability;
+    const prevProb = i > 0
+      ? missedBalls[i - 1].winProbability
+      : (initialPrevProb !== undefined ? initialPrevProb : (cur.over === 0 && cur.ball === 1 ? 0.50 : cur.winProbability));
     totalSwing += Math.abs(cur.winProbability - prevProb);
     const kind = classifyBall(cur);
     if (kind === "wicket") wickets++;
@@ -475,7 +560,7 @@ export function computeThrillRating(missedBalls: Ball[]): ThrillRating {
 /**
  * Generates forward-looking "What to watch next" card.
  */
-export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta): WhatToWatchNext {
+export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta, allBalls?: Ball[]): WhatToWatchNext {
   const currentRuns = lastBall.cumulativeScore;
   const currentWickets = lastBall.cumulativeWickets;
   const ballsCompleted = (lastBall.over * 6) + lastBall.ball;
@@ -484,16 +569,61 @@ export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta): WhatToWatch
   const wicketsInHand = 10 - currentWickets;
 
   const onStrike = lastBall.batter;
-  const nonStriker = onStrike === "Hardik Pandya" ? "Tilak Varma" : "Hardik Pandya";
-  const upcomingBowler = lastBall.bowler === "Lockie Ferguson" ? "Ferguson (finishing spell)" : "Mitchell Santner (spin control)";
 
+  // Derive dynamic active non-striker
+  let nonStriker = "Partner";
+  if (allBalls && allBalls.length > 0) {
+    const lastBallIdx = allBalls.findIndex(b => b.over === lastBall.over && b.ball === lastBall.ball);
+    const searchIdx = lastBallIdx !== -1 ? lastBallIdx : allBalls.length - 1;
+    for (let i = searchIdx; i >= 0; i--) {
+      const b = allBalls[i];
+      if (b.batter !== onStrike && !b.wicket) {
+        nonStriker = b.batter;
+        break;
+      }
+    }
+  } else {
+    if (onStrike === "Rohit Sharma") nonStriker = "Shubman Gill";
+    else if (onStrike === "Shubman Gill") nonStriker = "Rohit Sharma";
+    else if (onStrike === "Suryakumar Yadav") nonStriker = "Rohit Sharma";
+    else if (onStrike === "Hardik Pandya") nonStriker = "Tilak Varma";
+    else if (onStrike === "Tilak Varma") nonStriker = "Hardik Pandya";
+  }
+
+  // Derive upcoming bowler based on over completion and match phase
+  let nextBowler = lastBall.bowler;
+  if (lastBall.ball === 6 && allBalls && allBalls.length > 0) {
+    const prevOverBalls = allBalls.filter(b => b.over === lastBall.over - 1);
+    if (prevOverBalls.length > 0) {
+      nextBowler = prevOverBalls[0].bowler;
+    }
+  }
+
+  const phaseDesc = lastBall.over < 6
+    ? "Powerplay spell"
+    : lastBall.over < 15
+    ? "Middle overs control"
+    : "Death overs execution";
+
+  const upcomingBowler = `${nextBowler} (${phaseDesc})`;
+
+  const rrr = ballsRemaining > 0 ? ((runsNeeded / ballsRemaining) * 6).toFixed(2) : "0.00";
   const equation = runsNeeded <= 0 
     ? "Target achieved!" 
-    : `Need ${runsNeeded} runs from ${ballsRemaining} balls with ${wicketsInHand} wickets in hand (RRR ${((runsNeeded / Math.max(1, ballsRemaining)) * 6).toFixed(2)})`;
+    : `Need ${runsNeeded} runs from ${ballsRemaining} balls with ${wicketsInHand} wickets in hand (RRR ${rrr})`;
 
-  const tacticalNote = runsNeeded > 40 && ballsRemaining <= 36
-    ? `${onStrike} will target the shorter boundary; look for New Zealand's death bowling plan.`
-    : `India in control of the required rate; key wicket needed for New Zealand to break back in.`;
+  let tacticalNote: string;
+  if (runsNeeded <= 0) {
+    tacticalNote = `${meta.team2} have successfully chased down the target.`;
+  } else if (Number(rrr) >= 11.0) {
+    tacticalNote = `Required rate climbing at ${rrr} rpo. ${onStrike} must target boundaries against ${nextBowler}.`;
+  } else if (currentWickets >= 4 && wicketsInHand <= 3) {
+    tacticalNote = `${meta.team1} attacking with close-in catchers; ${onStrike} and ${nonStriker} must protect remaining wickets.`;
+  } else if (Number(rrr) <= 6.5) {
+    tacticalNote = `${meta.team2} firmly in control of the chase; strike rotation will comfortably see them home.`;
+  } else {
+    tacticalNote = `Evenly poised at ${rrr} RRR; key battle between ${onStrike} and ${nextBowler} to dictate momentum.`;
+  }
 
   return {
     onStrike,

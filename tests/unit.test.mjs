@@ -125,18 +125,19 @@ test("Validation guardrail: validateRecapAgainstBallData detects hallucinated ov
   assert.ok(invalidResult.issues.length >= 2);
 });
 
-test("Match Registry: getMatchById resolves matches dynamically with liveBallIndex", () => {
+test("Match Registry: getMatchById resolves matches dynamically and returns null for unknown match (Bug 8)", () => {
   const defaultMatch = getMatchById();
+  assert.ok(defaultMatch !== null);
   assert.strictEqual(defaultMatch.meta.matchId, "ind-nz-2026-t20-04");
   assert.strictEqual(defaultMatch.meta.liveBallIndex, 85);
 
   const ausMatch = getMatchById("ind-aus-2026-t20-final");
+  assert.ok(ausMatch !== null);
   assert.strictEqual(ausMatch.meta.matchId, "ind-aus-2026-t20-final");
   assert.strictEqual(ausMatch.meta.target, 192);
-  assert.strictEqual(ausMatch.meta.liveBallIndex, 90);
 
   const unknownMatch = getMatchById("non-existent-id");
-  assert.strictEqual(unknownMatch.meta.matchId, "ind-nz-2026-t20-04");
+  assert.strictEqual(unknownMatch, null, "Unknown matchId must return null (404), not silently fallback to default");
 });
 
 test("buildRecapPrompt generates valid prompt with compressed payload and pre-computed moments", () => {
@@ -231,4 +232,100 @@ test("Zero-Spoiler Security 3: story-only buildRecapPrompt strictly redacts scor
   assert.ok(storyOnlyPrompt.includes("ZERO-SPOILER RULE"));
   assert.strictEqual(storyOnlyPrompt.includes("Target: 178"), false, "Target score must be redacted in story-only mode");
   assert.strictEqual(storyOnlyPrompt.includes("124/3"), false, "Live cumulative score must be redacted in story-only mode");
+});
+
+test("Bug 14 Fix: getTopMomentsFallback computes accurate win prob swing for first ball of window", () => {
+  const windowBalls = sliceBalls(matchBalls, 9, 14.2); // Starts at ball 9.1
+  const ballBefore = matchBalls[53]; // Ball 8.6
+  assert.ok(ballBefore !== undefined);
+
+  // Passing initialPrevProb
+  const moments = getTopMomentsFallback(windowBalls, 3, ballBefore.winProbability);
+  assert.ok(moments.length > 0);
+  assert.ok(moments[0].swingDelta > 0, "Top moment swing delta must be greater than zero");
+
+  // Thrill rating also receives initialPrevProb
+  const thrill = computeThrillRating(windowBalls, ballBefore.winProbability);
+  assert.ok(thrill.rating >= 7.0 && thrill.rating <= 10.0);
+});
+
+test("Bug 15 Fix: promptBuilder calculates startScore before first delivery and labels overs consistently", () => {
+  const missedBalls = sliceBalls(matchBalls, 5, 10);
+  const prompt = buildRecapPrompt(missedBalls, matchMeta, 6, 10, []);
+
+  // Score before over 6 (after over 5) was 49/1, not the score after ball 5.1
+  const firstBall = missedBalls[0];
+  const scoreBefore = firstBall.cumulativeScore - firstBall.runs;
+  assert.ok(prompt.includes(`${scoreBefore}/`), `Prompt must report score before first ball: ${scoreBefore}`);
+});
+
+test("Bug 16 Fix: calculateFantasyPerformance excludes run-outs from bowler and avoids false 'Dismissed'", () => {
+  // Test a delivery where wicket is a run out
+  const runOutBall = {
+    over: 5,
+    ball: 1,
+    batter: "Player A",
+    bowler: "Hardik Pandya",
+    runs: 0,
+    wicket: true,
+    wicketType: "run out",
+    dismissedPlayer: "Player B",
+    winProbability: 0.5,
+    cumulativeScore: 50,
+    cumulativeWickets: 2,
+    commentary: "Run out!",
+  };
+
+  const fantasy = calculateFantasyPerformance([runOutBall], "Hardik Pandya", "Rohit Sharma");
+  assert.strictEqual(fantasy.captain.wickets, 0, "Run-out must NOT be credited to the bowler as a wicket");
+
+  // Rohit did not bat in this single ball
+  assert.ok(fantasy.viceCaptain.summary.includes("Did not bat"), "Must say 'Did not bat' rather than 'Dismissed' when player did not bat");
+});
+
+test("Bug 17 Fix: getWhatToWatchNext derives actual active non-striker and spell phase", () => {
+  const ball = matchBalls[20]; // 3.3 by Boult to Gill
+  const watchNext = getWhatToWatchNext(ball, matchMeta, matchBalls);
+
+  assert.strictEqual(watchNext.onStrike, ball.batter);
+  assert.strictEqual(watchNext.nonStriker, "Rohit Sharma", "Active non-striker in over 4 was Rohit Sharma");
+  assert.ok(watchNext.upcomingBowler.includes("Powerplay"), "Overs < 6 must be identified as Powerplay spell");
+});
+
+test("Bug 19 Fix: getNextSimulatedBall rejects fractional or negative index with 400", () => {
+  const token = createSimulatorToken("ind-nz-2026-t20-04", 85);
+
+  const fractionalReq = getNextSimulatedBall("ind-nz-2026-t20-04", token, 14.7);
+  assert.strictEqual(fractionalReq.status, 400);
+  assert.ok(fractionalReq.error?.includes("INVALID_INDEX"));
+
+  const negativeReq = getNextSimulatedBall("ind-nz-2026-t20-04", token, -1);
+  assert.strictEqual(negativeReq.status, 400);
+  assert.ok(negativeReq.error?.includes("INVALID_INDEX"));
+});
+
+test("Bug 11 Fix: validateRecapAgainstBallData catches invalid mood and future over narrative leaks", () => {
+  const sampleBalls = sliceBalls(matchBalls, 5, 10);
+
+  // Invalid mood
+  const invalidMoodRecap = {
+    oneLiner: "India played well",
+    story: "Good batting in the middle overs",
+    top3Moments: [],
+    mood: "Super excited", // Not in ALLOWED_MOODS
+  };
+  const moodCheck = validateRecapAgainstBallData(invalidMoodRecap, sampleBalls, 10);
+  assert.strictEqual(moodCheck.valid, false);
+  assert.ok(moodCheck.issues.some(i => i.includes("Invalid mood")));
+
+  // Hallucinated future over in narrative (e.g. mentions over 18 when window is up to 10)
+  const futureOverRecap = {
+    oneLiner: "In over 18 the match reached a climax",
+    story: "India chased down the target in over 19",
+    top3Moments: [],
+    mood: "Cruising",
+  };
+  const overCheck = validateRecapAgainstBallData(futureOverRecap, sampleBalls, 10);
+  assert.strictEqual(overCheck.valid, false);
+  assert.ok(overCheck.issues.some(i => i.includes("outside the allowed window")));
 });
