@@ -2,11 +2,17 @@
 
 import React, { useState, useEffect } from "react";
 import { MatchMeta, SpoilerLevel } from "@/types";
-import { Lock, ArrowRight, SlidersHorizontal, Clock, BellOff, Sparkles, ShieldCheck } from "lucide-react";
+import { Lock, ArrowRight, SlidersHorizontal, Clock, BellOff, Sparkles, ShieldCheck, X, CheckCircle2 } from "lucide-react";
 
 interface SpoilerGateProps {
   meta: MatchMeta;
-  onCatchUp: (fromOver: number, toOver: number, spoilerLevel?: SpoilerLevel, isWholeMatch?: boolean) => void;
+  onCatchUp: (
+    fromOver: number,
+    toOver: number,
+    spoilerLevel?: SpoilerLevel,
+    isWholeMatch?: boolean,
+    holdAlerts?: boolean
+  ) => void;
   onJumpToLiveDirect: () => void;
 }
 
@@ -30,6 +36,26 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   const [spoilerLevel, setSpoilerLevel] = useState<SpoilerLevel>("story-and-score");
   const [dndShieldActive, setDndShieldActive] = useState<boolean>(true);
   const [isWholeMatchSelected, setIsWholeMatchSelected] = useState<boolean>(false);
+  const [showGuaranteeModal, setShowGuaranteeModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("dream11_dnd_shield");
+      if (stored !== null) {
+        setDndShieldActive(stored === "true");
+      }
+    } catch {}
+  }, []);
+
+  const handleToggleDnd = () => {
+    setDndShieldActive(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem("dream11_dnd_shield", String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   // Prefetch default recap window (6 -> liveTargetOver) on gate load to make click instant
   useEffect(() => {
@@ -50,7 +76,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
   const handleStartCatchUp = () => {
     const fromIndex = Math.max(0, selectedStartOver - 1);
-    onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected);
+    onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected, dndShieldActive);
   };
 
   const handleTimeSelect = (minutes: number) => {
@@ -300,7 +326,8 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </div>
           <button
             type="button"
-            onClick={() => setDndShieldActive(!dndShieldActive)}
+            onClick={handleToggleDnd}
+            aria-label="Toggle lock screen spoilers shield"
             className={`w-9 h-5 rounded-full transition-colors p-0.5 ${
               dndShieldActive ? "bg-brand-red" : "bg-slate-700"
             }`}
@@ -314,10 +341,14 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
         {/* Read time summary line */}
         <div className="text-xs text-slate-400 flex items-center justify-between pt-1">
           <span>{missedOversCount} overs · {readTimeEstimate}</span>
-          <span className="text-emerald-400 font-medium flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setShowGuaranteeModal(true)}
+            className="text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1 transition-colors cursor-pointer"
+          >
             <Lock className="w-3 h-3" />
-            <span>Zero Spoilers Guaranteed</span>
-          </span>
+            <span className="underline decoration-dotted underline-offset-2">Zero Spoilers Guaranteed</span>
+          </button>
         </div>
 
         {/* Primary Action Button */}
@@ -341,6 +372,82 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Zero-Spoiler Guarantee Modal */}
+      {showGuaranteeModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-brand-surface border border-brand-border rounded-container max-w-md w-full p-5 space-y-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-brand-border pb-3">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-emerald-400" />
+                <h3 className="font-semibold text-sm text-white">Zero-Spoiler Guarantee</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGuaranteeModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-chip"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Dream11 CatchUp AI uses 4 strict privacy and containment layers so you can catch up on your own terms without premature score leaks:
+            </p>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1">
+                <div className="flex items-center gap-1.5 font-medium text-emerald-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>1. Server-Only Bundle Isolation</span>
+                </div>
+                <p className="text-slate-400 text-[11px] pl-5 leading-normal">
+                  All future match deliveries reside strictly in server memory (<code className="text-slate-300">server-only</code>) and are never bundled into client JavaScript.
+                </p>
+              </div>
+
+              <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1">
+                <div className="flex items-center gap-1.5 font-medium text-emerald-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>2. Cryptographic Live Delivery Clock</span>
+                </div>
+                <p className="text-slate-400 text-[11px] pl-5 leading-normal">
+                  Live feed advances require HMAC-signed session tokens and rate-limiting. Premature API queries return 403 Forbidden.
+                </p>
+              </div>
+
+              <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1">
+                <div className="flex items-center gap-1.5 font-medium text-emerald-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>3. Server-Side Score Redaction</span>
+                </div>
+                <p className="text-slate-400 text-[11px] pl-5 leading-normal">
+                  In &ldquo;Story-Only&rdquo; mode, numbers and live outcomes are stripped on the server before AI generation and chart rendering.
+                </p>
+              </div>
+
+              <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1">
+                <div className="flex items-center gap-1.5 font-medium text-emerald-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>4. DND Notification Shield</span>
+                </div>
+                <p className="text-slate-400 text-[11px] pl-5 leading-normal">
+                  Mutes lock-screen notifications and push teasers until you finish reading and tap &ldquo;Jump to Live&rdquo;.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowGuaranteeModal(false)}
+              className="w-full py-2 rounded-chip bg-brand-red hover:bg-brand-redHover text-white text-xs font-semibold transition-colors mt-2"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

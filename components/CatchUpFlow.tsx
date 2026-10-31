@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
-import { publicMatchBalls, matchMeta } from "@/lib/matchData";
-import { RecapPayload, SpoilerLevel } from "@/types";
+import React, { useState, useEffect } from "react";
+import { matchMeta as defaultMeta } from "@/lib/matchData";
+import { Ball, MatchMeta, RecapPayload, SpoilerLevel } from "@/types";
 import { SpoilerGate } from "@/components/screens/SpoilerGate";
 import { RecapScreen } from "@/components/screens/RecapScreen";
 import { LiveView } from "@/components/screens/LiveView";
@@ -10,21 +10,58 @@ import { AlertCircle, RotateCcw, Loader2 } from "lucide-react";
 
 type AppState = "gate" | "loading" | "recap" | "live" | "error";
 
-export const CatchUpFlow: React.FC = () => {
+interface CatchUpFlowProps {
+  initialMeta?: MatchMeta;
+  initialBalls?: Ball[];
+  initialSessionToken?: string;
+}
+
+export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
+  initialMeta,
+  initialBalls,
+  initialSessionToken,
+}) => {
+  const [meta, setMeta] = useState<MatchMeta>(initialMeta || defaultMeta);
+  const [balls, setBalls] = useState<Ball[]>(initialBalls || []);
+  const [sessionToken, setSessionToken] = useState<string | undefined>(initialSessionToken);
+
   const [appState, setAppState] = useState<AppState>("gate");
   const [fromOver, setFromOver] = useState<number>(5); // default over index 5 (Over 6)
-  const [toOver, setToOver] = useState<number>(matchMeta.currentLiveOver);
+  const [toOver, setToOver] = useState<number>(meta.currentLiveOver);
+  const [selectedSpoilerLevel, setSelectedSpoilerLevel] = useState<SpoilerLevel>("story-and-score");
+  const [holdBackAlerts, setHoldBackAlerts] = useState<boolean>(true);
   const [recapData, setRecapData] = useState<RecapPayload | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // If initial balls were not supplied via SSR, fetch public-only deliveries from /api/match
+  useEffect(() => {
+    if (balls.length === 0) {
+      fetch("/api/match")
+        .then((res) => res.json())
+        .then((json) => {
+          if (json.success && json.data) {
+            setMeta(json.data.meta);
+            setBalls(json.data.balls);
+            if (json.data.sessionToken) {
+              setSessionToken(json.data.sessionToken);
+            }
+          }
+        })
+        .catch((err) => console.warn("Failed to load initial match balls:", err));
+    }
+  }, [balls.length]);
 
   const handleStartCatchUp = async (
     selectedFrom: number, 
     selectedTo: number, 
-    spoilerLevel?: SpoilerLevel,
-    isWholeMatch?: boolean
+    spoilerLevel: SpoilerLevel = "story-and-score",
+    isWholeMatch?: boolean,
+    holdAlerts = true
   ) => {
     setFromOver(selectedFrom);
     setToOver(selectedTo);
+    setSelectedSpoilerLevel(spoilerLevel);
+    setHoldBackAlerts(holdAlerts);
     setAppState("loading");
     setErrorMessage(null);
 
@@ -33,10 +70,10 @@ export const CatchUpFlow: React.FC = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          matchId: matchMeta.matchId,
+          matchId: meta.matchId,
           fromOver: selectedFrom,
           toOver: selectedTo,
-          spoilerLevel: spoilerLevel || "story-and-score",
+          spoilerLevel,
           isWholeMatch: !!isWholeMatch,
         }),
       });
@@ -79,13 +116,13 @@ export const CatchUpFlow: React.FC = () => {
       {/* Screen 1: Spoiler Gate */}
       {appState === "gate" && (
         <SpoilerGate
-          meta={matchMeta}
+          meta={meta}
           onCatchUp={handleStartCatchUp}
           onJumpToLiveDirect={handleJumpToLiveDirect}
         />
       )}
 
-      {/* Loading Overlay */}
+      {/* Loading Transition State */}
       {appState === "loading" && (
         <div className="w-full max-w-sm mx-auto my-auto px-4 py-24 text-center">
           <Loader2 className="w-8 h-8 mx-auto mb-4 text-brand-red animate-spin" />
@@ -102,11 +139,12 @@ export const CatchUpFlow: React.FC = () => {
       {/* Screen 2: Recap Screen */}
       {appState === "recap" && recapData && (
         <RecapScreen
-          meta={matchMeta}
+          meta={meta}
           recap={recapData}
           missedFromOver={fromOver}
           missedToOver={toOver}
-          balls={publicMatchBalls}
+          balls={balls}
+          holdBackAlerts={holdBackAlerts}
           onBackToGate={handleBackToGate}
           onJumpToLive={handleJumpToLiveDirect}
         />
@@ -115,8 +153,9 @@ export const CatchUpFlow: React.FC = () => {
       {/* Screen 3: Live View */}
       {appState === "live" && (
         <LiveView
-          meta={matchMeta}
-          balls={publicMatchBalls}
+          meta={meta}
+          balls={balls}
+          sessionToken={sessionToken}
           onBackToRecap={handleBackToRecap}
           onResetToGate={handleBackToGate}
         />
@@ -137,7 +176,7 @@ export const CatchUpFlow: React.FC = () => {
           <div className="flex items-center justify-center gap-2">
             <button
               type="button"
-              onClick={() => handleStartCatchUp(fromOver, toOver)}
+              onClick={() => handleStartCatchUp(fromOver, toOver, selectedSpoilerLevel)}
               className="px-3.5 py-2 rounded-chip bg-brand-surface border border-brand-border text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />

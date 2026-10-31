@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { Ball } from "@/types";
+import { Ball, SpoilerLevel } from "@/types";
 import { isBallInRange, EVENT_STYLE, classifyBall } from "@/lib/matchUtils";
 import { X } from "lucide-react";
 
@@ -9,6 +9,7 @@ interface WinProbChartProps {
   balls: Ball[];
   missedFromOver: number;
   missedToOver: number;
+  spoilerLevel?: SpoilerLevel;
 }
 
 interface PointDetails {
@@ -31,6 +32,7 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
   balls,
   missedFromOver,
   missedToOver,
+  spoilerLevel,
 }) => {
   const [pinnedIdx, setPinnedIdx] = useState<number | null>(null);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
@@ -338,9 +340,11 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
               <span className="tabular-nums font-semibold text-xs text-emerald-400">
                 {activePoint.prob}% win
               </span>
-              <span className="tabular-nums text-[11px] text-slate-400">
-                ({activePoint.score})
-              </span>
+              {spoilerLevel !== "story-only" && (
+                <span className="tabular-nums text-[11px] text-slate-400">
+                  ({activePoint.score})
+                </span>
+              )}
               {pinnedIdx !== null && (
                 <button
                   type="button"

@@ -19,6 +19,7 @@ import {
   ThumbsDown,
   Compass,
   Trophy,
+  ShieldCheck,
 } from "lucide-react";
 
 interface RecapScreenProps {
@@ -27,6 +28,7 @@ interface RecapScreenProps {
   missedFromOver: number;
   missedToOver: number;
   balls: Ball[];
+  holdBackAlerts?: boolean;
   onBackToGate: () => void;
   onJumpToLive: () => void;
 }
@@ -37,6 +39,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
   missedFromOver,
   missedToOver,
   balls,
+  holdBackAlerts,
   onBackToGate,
   onJumpToLive,
 }) => {
@@ -183,7 +186,14 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
           <span>Adjust window</span>
         </button>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {holdBackAlerts && (
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/50 px-2 py-0.5 rounded-chip">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Lock-screen alerts muted</span>
+            </div>
+          )}
+
           {/* Language Switcher */}
           <div className="flex items-center bg-brand-surface p-0.5 rounded-chip border border-brand-border text-[11px]">
             <button
@@ -350,6 +360,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
             balls={balls}
             missedFromOver={missedFromOver}
             missedToOver={missedToOver}
+            spoilerLevel={recap.spoilerLevel}
           />
         </div>
 

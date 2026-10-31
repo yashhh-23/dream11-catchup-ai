@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 // Match data & utility functions
-import { matchBalls, matchMeta, getMatchById } from "../lib/matchData.ts";
+import {
+  serverMatchBalls as matchBalls,
+  serverMatchMeta as matchMeta,
+  getServerMatchById as getMatchById,
+  getPublicMatchData,
+  getNextSimulatedBall,
+} from "../lib/serverMatchData.ts";
+import { createSimulatorToken } from "../lib/sessionUtils.ts";
 import {
   sliceBalls,
   formatOver,
@@ -181,4 +188,47 @@ test("Product Feature: Hinglish dynamic narrative contains authentic cricket com
   assert.ok(headline.includes("Bhai"));
   assert.ok(story.includes("Overs 6 se 14.2"));
   assert.ok(story.includes("runs banaye 2 wicket kho kar"));
+});
+
+test("Zero-Spoiler Security 1: getPublicMatchData isolates future balls strictly to current live ball 14.2", () => {
+  const { meta, balls, sessionToken } = getPublicMatchData();
+  assert.strictEqual(balls.length, 86, "Must contain exactly balls up to liveBallIndex 85");
+  const lastBall = balls[balls.length - 1];
+  assert.strictEqual(lastBall.over, 14);
+  assert.strictEqual(lastBall.ball, 2);
+  assert.ok(sessionToken && sessionToken.length > 20, "Must generate signed simulation token");
+
+  // Verify none of the subsequent deliveries are included
+  const hasFinished = balls.some(b => b.commentary.includes("RINKU FINISHES"));
+  assert.strictEqual(hasFinished, false, "Must never leak future winning ball in public match data");
+});
+
+test("Zero-Spoiler Security 2: getNextSimulatedBall requires valid token and blocks premature inspection (401 & 403)", () => {
+  // 1. Without token -> 401 Unauthorized
+  const unauth = getNextSimulatedBall("ind-nz-2026-t20-04", null, 86);
+  assert.strictEqual(unauth.status, 401);
+  assert.strictEqual(unauth.ball, null);
+
+  // 2. Premature index (e.g. index 111 - Rinku finishes) -> 403 Forbidden
+  const token = createSimulatorToken("ind-nz-2026-t20-04", 85);
+  const premature = getNextSimulatedBall("ind-nz-2026-t20-04", token, 111);
+  assert.strictEqual(premature.status, 403);
+  assert.strictEqual(premature.ball, null);
+  assert.ok(premature.error?.includes("Delivery has not been bowled yet"));
+
+  // 3. Immediate current ball (index 85) -> allowed
+  const validReq = getNextSimulatedBall("ind-nz-2026-t20-04", token, 85);
+  assert.ok(validReq.ball !== null);
+  assert.strictEqual(validReq.ball.over, 14);
+  assert.strictEqual(validReq.ball.ball, 2);
+});
+
+test("Zero-Spoiler Security 3: story-only buildRecapPrompt strictly redacts scores, runs and targets", () => {
+  const missedBalls = sliceBalls(matchBalls, 5, 14.2);
+  const computedMoments = getTopMomentsFallback(missedBalls, 3);
+  const storyOnlyPrompt = buildRecapPrompt(missedBalls, matchMeta, 6, "14.2", computedMoments, "story-only");
+
+  assert.ok(storyOnlyPrompt.includes("ZERO-SPOILER RULE"));
+  assert.strictEqual(storyOnlyPrompt.includes("Target: 178"), false, "Target score must be redacted in story-only mode");
+  assert.strictEqual(storyOnlyPrompt.includes("124/3"), false, "Live cumulative score must be redacted in story-only mode");
 });

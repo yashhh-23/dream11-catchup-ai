@@ -17,6 +17,7 @@ import {
 interface LiveViewProps {
   meta: MatchMeta;
   balls: Ball[];
+  sessionToken?: string;
   onBackToRecap: () => void;
   onResetToGate: () => void;
 }
@@ -37,6 +38,7 @@ const CHAT_MESSAGES = [
 export const LiveView: React.FC<LiveViewProps> = ({
   meta,
   balls: initialBalls,
+  sessionToken,
   onBackToRecap,
   onResetToGate,
 }) => {
@@ -44,7 +46,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
 
   const [liveBalls, setLiveBalls] = useState<Ball[]>(initialBalls);
   const [currentIndex, setCurrentIndex] = useState<number>(initialLiveIndex);
-  const [isPlayingAuto, setIsPlayingAuto] = useState<boolean>(true);
+  const [isPlayingAuto, setIsPlayingAuto] = useState<boolean>(false);
   const [showDemoControls, setShowDemoControls] = useState<boolean>(false);
   const [isFinished, setIsFinished] = useState<boolean>(false);
 
@@ -57,7 +59,8 @@ export const LiveView: React.FC<LiveViewProps> = ({
     }
 
     try {
-      const res = await fetch(`/api/match/delta?matchId=${meta.matchId}&index=${targetIdx}`);
+      const tokenQuery = sessionToken ? `&token=${encodeURIComponent(sessionToken)}` : "";
+      const res = await fetch(`/api/match/delta?matchId=${meta.matchId}&index=${targetIdx}${tokenQuery}`);
       const json = await res.json();
 
       if (json.success && json.data) {
@@ -69,12 +72,15 @@ export const LiveView: React.FC<LiveViewProps> = ({
           setIsFinished(true);
           setIsPlayingAuto(false);
         }
+      } else if (!json.success && json.error) {
+        console.warn("Live delta locked or protected:", json.error.message);
+        setIsPlayingAuto(false);
       }
     } catch (e) {
       console.warn("Could not fetch next delta ball:", e);
       setIsPlayingAuto(false);
     }
-  }, [liveBalls.length, meta.matchId]);
+  }, [liveBalls.length, meta.matchId, sessionToken]);
 
   useEffect(() => {
     if (!isPlayingAuto || isFinished) return;

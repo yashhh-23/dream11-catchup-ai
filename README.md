@@ -34,19 +34,26 @@ Fans miss *why* the match shifted, who took the pivotal wickets, and how their D
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture & Zero-Spoiler Security
 
 ```mermaid
 flowchart TD
     subgraph Client["Next.js 14 Client Tier (Tailwind Design Tokens)"]
-        UI_Gate["Screen 1: Spoiler Gate\n• Shielded Score Placeholder (•••/•)\n• Time Away & Over Selectors\n• 3 Spoiler Levels"]
-        UI_Recap["Screen 2: Rhea AI Recap\n• Fantasy Team Impact & Masked Rank\n• Commentator Headline & Story\n• Step-by-Step Moment Reveal\n• SVG Win-Prob Chart\n• Audio Voiceover (EN/Hinglish)"]
-        UI_Live["Screen 3: Live Match Center\n• Live Scoreboard (14.2 ov)\n• Real-Time Ball Delivery Feed\n• Synced Watch-Along Chat"]
+        UI_Gate["Screen 1: Spoiler Gate\n• Shielded Score Placeholder (•••/•)\n• Time Away & Over Selectors\n• 3 Spoiler Levels (Story Only / +Phase / Full)\n• Lock-Screen DND Shield Toggle"]
+        UI_Recap["Screen 2: Rhea AI Recap\n• Fantasy Team Impact & Masked Rank\n• Commentator Headline & Story\n• Step-by-Step Moment Reveal\n• SVG Win-Prob Chart\n• Audio Voiceover (EN / Indian Hinglish)"]
+        UI_Live["Screen 3: Live Match Center\n• Live Scoreboard (Paused by default at 14.2)\n• Real-Time Ball Delivery Feed\n• Cryptographic Live Clock Token Verification\n• Synced Watch-Along Chat"]
         FallbackEngine["Local Deterministic Engine\n(lib/matchUtils.ts)\nZero-Downtime Offline Fallback"]
     end
 
+    subgraph ServerSecurity["Server-Only Isolation & Security Boundary"]
+        ServerData["Server-Only Match Repository\n(lib/serverMatchData.ts)\n• 112 Match Deliveries\n• Client bundles NEVER receive future balls\n• Evaluated strictly on the server"]
+        SessionCrypto["Live Simulation Clock\n(lib/sessionUtils.ts)\n• HMAC-SHA256 Signed Tokens\n• Real-Time Delivery Rate Limiting\n• Rejects premature queries with 403 Forbidden"]
+    end
+
     subgraph API["Next.js Serverless API Tier"]
-        Route["POST /api/recap\n(app/api/recap/route.ts)\n• In-Memory Response Caching\n• Unified Error Responses"]
+        RouteMatch["GET /api/match\n• Serves public balls up to 14.2\n• Issues signed simulator session token"]
+        RouteDelta["GET /api/match/delta\n• Validates token against server clock\n• Unlocks one delivery at real-time pace (~4s)"]
+        RouteRecap["POST /api/recap\n• Server-side score redaction for 'story-only'\n• Clamps toOver <= 14.2 (Max allowed live)\n• In-Memory De-duplication & Caching"]
         PromptBuilder["Prompt Builder & Token Compressor\n(lib/promptBuilder.ts)"]
     end
 
@@ -54,19 +61,18 @@ flowchart TD
         Groq["Groq Cloud LPU Engine\n(llama-3.3-70b-versatile)\n<800ms JSON Latency"]
     end
 
-    subgraph DataTier["Data Tier"]
-        MatchData["112 Realistic Match Deliveries\n(lib/matchData.ts)\n• Centralized liveBallIndex (85)"]
-    end
-
-    UI_Gate -->|1. User selects window [fromOver, toOver]| Route
-    MatchData -->|Load match deliveries| Route
-    Route --> PromptBuilder
+    UI_Gate -->|1. User selects window [fromOver, toOver]| RouteRecap
+    ServerData -->|Load safe balls up to 14.2| RouteRecap
+    RouteRecap --> PromptBuilder
     PromptBuilder -->|2. Compressed ball payload & JSON schema| Groq
-    Groq -->|3. Structured JSON summary| Route
-    Route -->|4. Return typed ApiResponse| UI_Recap
-    Route -.->|Timeout / Fallback| FallbackEngine
+    Groq -->|3. Structured JSON summary| RouteRecap
+    RouteRecap -->|4. Return typed ApiResponse| UI_Recap
+    RouteRecap -.->|Timeout / Fallback| FallbackEngine
     FallbackEngine -.->|Immediate heuristic recap| UI_Recap
     UI_Recap -->|5. Jump to Live (Zero Spoilers)| UI_Live
+    UI_Live -->|6. Advance ball with signed token| RouteDelta
+    RouteDelta --> SessionCrypto
+    SessionCrypto -->|Authorize next delivery| ServerData
 ```
 
 ---
@@ -78,27 +84,29 @@ dream11/
 ├── app/                                 # Next.js 14 App Router
 │   ├── api/
 │   │   ├── match/
-│   │   │   ├── route.ts                 # GET /api/match: Zero-spoiler public balls serving
+│   │   │   ├── route.ts                 # GET /api/match: Serves safe public deliveries + session token
 │   │   │   └── delta/
-│   │   │       └── route.ts             # GET /api/match/delta: On-demand delivery feed streaming
+│   │   │       └── route.ts             # GET /api/match/delta: HMAC-validated delivery ticker stream
 │   │   └── recap/
-│   │       └── route.ts                 # POST /api/recap: Fused single-pass + in-flight de-duplication + cache
+│   │       └── route.ts                 # POST /api/recap: Server-side score redaction, caching & clamp
 │   ├── globals.css                      # Design tokens, Tailwind base, and dark mode palette
 │   ├── layout.tsx                       # Root layout & HTML metadata (Dream11 Theme)
-│   └── page.tsx                         # Main page mounting CatchUpFlow component
+│   └── page.tsx                         # SSR page delivering safe initial balls and token to CatchUpFlow
 │
 ├── components/                          # React Component Library
 │   ├── CatchUpFlow.tsx                  # State machine managing screens: gate -> recap -> live
 │   ├── charts/
-│   │   └── WinProbChart.tsx             # Interactive SVG win-probability momentum curve
+│   │   └── WinProbChart.tsx             # Interactive SVG win-probability curve with score redaction
 │   └── screens/
-│       ├── SpoilerGate.tsx              # Screen 1: Shielded score, time away & spoiler level selector
+│       ├── SpoilerGate.tsx              # Screen 1: Shielded score, DND shield toggle & zero-spoiler modal
 │       ├── RecapScreen.tsx              # Screen 2: Fantasy impact, audio, moments & what to watch next
-│       └── LiveView.tsx                 # Screen 3: Live match ticker, commentary, & chat
+│       └── LiveView.tsx                 # Screen 3: Live match ticker (paused by default), commentary & chat
 │
 ├── lib/                                 # Business Logic & Utility Modules
 │   ├── groqClient.ts                    # Sequential Groq SDK client (llama-3.3-70b -> llama-3.1-8b)
-│   ├── matchData.ts                     # Match deliveries (112 balls) & centralized liveBallIndex
+│   ├── matchData.ts                     # Public match metadata (safe for client reference)
+│   ├── serverMatchData.ts               # Server-only match repository & dynamic simulator registry
+│   ├── sessionUtils.ts                  # Cryptographic HMAC token generation & rate-limited clock
 │   ├── matchUtils.ts                    # Ball classification, EVENT_STYLE, fantasy engine, stats
 │   └── promptBuilder.ts                 # Token-compressed prompt generator for Groq LLM
 │
@@ -106,11 +114,11 @@ dream11/
 │   └── index.ts                         # Ball, MatchMeta, RecapPayload, ApiResponse<T>
 │
 ├── tests/                               # Automated Test Suite
-│   └── unit.test.mjs                    # 12 Unit tests running under native Node.js test runner
+│   └── unit.test.mjs                    # 16 Unit tests running under native Node.js test runner
 │
 ├── .env.example                         # Example environment variables template
 ├── next.config.mjs                      # Next.js build configuration
-├── package.json                         # Lean project dependencies (no unused packages)
+├── package.json                         # Lean project dependencies
 ├── tailwind.config.ts                   # Tailwind configuration with brand tokens
 ├── tsconfig.json                        # TypeScript compiler configuration
 └── README.md                            # Comprehensive project documentation
@@ -158,7 +166,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ```bash
 npm test
 ```
-All 12 unit tests run using Node.js's native test runner covering range slicing, ball classification, boundary calculations, fantasy points, and cricket over notation.
+All 16 unit tests run using Node.js's native test runner covering range slicing, ball classification, boundary calculations, fantasy points, zero-spoiler cryptographic tokens, and score redaction.
 
 ---
 

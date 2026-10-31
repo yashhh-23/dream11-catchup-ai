@@ -1,18 +1,19 @@
-import type { Ball, MatchMeta, TurningPointMoment } from "../types/index.ts";
+import type { Ball, MatchMeta, TurningPointMoment, SpoilerLevel } from "../types/index.ts";
 import { classifyBall } from "./matchUtils.ts";
 
 /**
  * Compresses ball sequences:
  * - Summarizes quiet overs into single-line summaries
  * - Emits detailed bowler-to-batter commentary only for wickets and boundaries
- * Cuts token count by ~65% and reduces Groq TTFT.
+ * - Strictly redacts score numbers when spoilerLevel === "story-only"
  */
 export function buildRecapPrompt(
   balls: Ball[],
   meta: MatchMeta,
   fromOverDisplay: number,
   toOverDisplay: number | string,
-  computedMoments: TurningPointMoment[]
+  computedMoments: TurningPointMoment[],
+  spoilerLevel: SpoilerLevel = "story-and-score"
 ): string {
   // Group balls by over to compress quiet spells
   const overBuckets: Record<number, Ball[]> = {};
@@ -65,10 +66,18 @@ export function buildRecapPrompt(
     `Moment ${idx + 1}: Over ${m.over} | ${m.label} | ${m.player} | Win prob: ${Math.round(m.winProbBefore * 100)}% -> ${Math.round(m.winProbAfter * 100)}% (Swing: ${Math.round(m.swingDelta * 100)}%)`
   ).join("\n");
 
+  const scoreContext = spoilerLevel === "story-only"
+    ? `NOTE: The user selected 'story-only'. Zero score spoilers permitted.`
+    : `In this missed window, score went from ${startScore}/${startWickets} to ${endScore}/${endWickets}. Target: ${meta.target}.`;
+
+  const spoilerConstraint = spoilerLevel === "story-only"
+    ? `5. ZERO-SPOILER RULE: DO NOT write any numerical scores, runs needed, or delivery counts (e.g. no specific scorelines like 100/2 or run equations). Describe purely the narrative flow, pitch pressure, wickets, boundaries, and momentum.`
+    : `5. DO NOT reveal any events after over ${toOverDisplay}.`;
+
   return `You are Rhea AI, Dream11's cricket-obsessed companion texting a fan who just joined the match late.
 The fan missed Overs ${fromOverDisplay} to ${toOverDisplay}.
-Match: ${meta.team2} chasing (Target: ${meta.target}) against ${meta.team1} (${meta.format} at ${meta.venue}).
-In this missed window, score went from ${startScore}/${startWickets} to ${endScore}/${endWickets}.
+Match: ${meta.team2} chasing against ${meta.team1} (${meta.format} at ${meta.venue}).
+${scoreContext}
 
 Ball-by-ball sequence in missed window (DO NOT describe or reveal any balls after over ${toOverDisplay}):
 ${compressedBalls}
@@ -80,7 +89,7 @@ Your task is to write ONLY the prose text for these pre-computed events. Do not 
 Return ONLY a valid JSON object in this exact schema (no markdown, no backticks, no preamble):
 {
   "oneLiner": "One punchy, vivid sentence capturing the missed drama like an excited cricket buddy texting you.",
-  "story": "3 to 4 sentences narrative. Describe how the phase started, the pivotal turning point, the counter-punch, and how things stand at the end of this phase (up to over ${toOverDisplay}). DO NOT reveal any events after over ${toOverDisplay}.",
+  "story": "3 to 4 sentences narrative. Describe how the phase started, the pivotal turning point, the counter-punch, and how things stand at the end of this phase (up to over ${toOverDisplay}).",
   "top3Moments": [
     {
       "description": "Vivid commentary describing this exact delivery and shot.",
@@ -95,5 +104,6 @@ CRITICAL RULES:
 1. "mood" must be exactly one of: "Cruising", "Knife's edge", "Chasing hard", "Game over", "Comeback on".
 2. In "top3Moments", provide descriptions for exactly the 3 pre-computed moments in the same order.
 3. Every player mentioned in the prose MUST be someone who batted or bowled in the ball-by-ball sequence above.
-4. Total words across all fields must be under 200 words. Keep it punchy, conversational, and authentic!`;
+4. Total words across all fields must be under 200 words. Keep it punchy, conversational, and authentic!
+${spoilerConstraint}`;
 }
