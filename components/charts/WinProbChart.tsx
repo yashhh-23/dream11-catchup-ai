@@ -12,20 +12,11 @@ interface WinProbChartProps {
   spoilerLevel?: SpoilerLevel;
 }
 
-interface PointDetails {
+interface ChartDot {
   idx: number;
-  overText: string;
-  prob: number;
-  score: string;
-  commentary: string;
-  isWicket: boolean;
-  isSix: boolean;
-  isFour: boolean;
-  batter: string;
-  bowler: string;
-  runs: number;
   cx: number;
   cy: number;
+  kind: "wicket" | "six" | "four" | "dot" | "run";
 }
 
 export const WinProbChart: React.FC<WinProbChartProps> = ({
@@ -52,7 +43,6 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
     pathD,
     windowX1,
     windowW,
-    allDots,
     significantDots,
     xTicks,
   } = useMemo(() => {
@@ -84,46 +74,69 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
     const wX2 = getX(safeEndIdx);
     const wW = Math.max(0, wX2 - wX1);
 
-    const dots: PointDetails[] = balls.map((b, idx) => {
+    // Only create dot objects for true key events (wickets, sixes, fours, window boundaries)
+    // Avoids 13-field objects for every single delivery (Optimization E)
+    const sigDots: ChartDot[] = [];
+    for (let idx = 0; idx < balls.length; idx++) {
+      const b = balls[idx];
       const kind = classifyBall(b);
-      return {
-        idx,
-        overText: `Over ${b.over}.${b.ball}`,
-        prob: Math.round(b.winProbability * 100),
-        score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
-        commentary: b.commentary,
-        isWicket: kind === "wicket",
-        isSix: kind === "six",
-        isFour: kind === "four",
-        batter: b.batter,
-        bowler: b.bowler,
-        runs: b.runs,
-        cx: getX(idx),
-        cy: getY(b.winProbability),
-      };
-    });
+      const isKey = kind === "wicket" || kind === "six" || kind === "four" || idx === startIdx || idx === safeEndIdx;
+      if (isKey) {
+        sigDots.push({
+          idx,
+          cx: getX(idx),
+          cy: getY(b.winProbability),
+          kind,
+        });
+      }
+    }
 
-    const sigDots = dots.filter(d => d.isWicket || d.isSix || d.isFour || isBallInRange(balls[d.idx], missedFromOver, missedToOver));
-
-    const ticks = [
-      { label: "Ov 1", x: getX(0) },
-      { label: "Ov 6", x: getX(Math.min(35, totalBalls - 1)) },
-      { label: "Ov 10", x: getX(Math.min(59, totalBalls - 1)) },
-      { label: "Ov 15", x: getX(Math.min(85, totalBalls - 1)) },
-    ];
+    // Dynamic X-axis ticks (Bug 31)
+    const maxOver = balls.length > 0 ? balls[balls.length - 1].over : 20;
+    const step = maxOver <= 10 ? 2 : maxOver <= 15 ? 3 : 5;
+    const ticks: { label: string; x: number }[] = [];
+    for (let ov = 1; ov <= maxOver + 1; ov += step) {
+      const ballIdx = Math.min((ov - 1) * 6, totalBalls - 1);
+      ticks.push({ label: `Ov ${ov}`, x: getX(ballIdx) });
+    }
+    if (ticks.length > 0 && ticks[ticks.length - 1].x < padLeft + chartW - 25) {
+      ticks.push({ label: `Ov ${maxOver + 1}`, x: getX(totalBalls - 1) });
+    }
 
     return {
       pathD: path,
       windowX1: wX1,
       windowW: wW,
-      allDots: dots,
       significantDots: sigDots,
       xTicks: ticks,
     };
   }, [balls, missedFromOver, missedToOver, totalBalls, chartW, chartH]);
 
   const activeIdx = pinnedIdx ?? hoveredIdx;
-  const activePoint = activeIdx !== null ? allDots[activeIdx] : null;
+  
+  // Derive full details only on-demand for the single active ball (Optimization E)
+  const activePoint = useMemo(() => {
+    if (activeIdx === null || !balls[activeIdx]) return null;
+    const b = balls[activeIdx];
+    const kind = classifyBall(b);
+    const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
+    const getY = (prob: number) => padTop + chartH - prob * chartH;
+    return {
+      idx: activeIdx,
+      overText: `Over ${b.over}.${b.ball}`,
+      prob: Math.round(b.winProbability * 100),
+      score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
+      commentary: b.commentary,
+      isWicket: kind === "wicket",
+      isSix: kind === "six",
+      isFour: kind === "four",
+      batter: b.batter,
+      bowler: b.bowler,
+      runs: b.runs,
+      cx: getX(activeIdx),
+      cy: getY(b.winProbability),
+    };
+  }, [activeIdx, balls, chartW, chartH, totalBalls]);
 
   const handlePointClick = (idx: number) => {
     setPinnedIdx(prev => (prev === idx ? null : idx));
@@ -250,26 +263,36 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
             />
           )}
 
-          {/* Interactive Dots for Key Deliveries */}
+          {/* Interactive Dots for Key Deliveries (Keyboard & Touch Accessible) */}
           {significantDots.map((point) => {
             const isSelected = activePoint?.idx === point.idx;
             const isPinnedThis = pinnedIdx === point.idx;
 
-            const fillColor = point.isWicket
+            const fillColor = point.kind === "wicket"
               ? "#ef4444"
-              : point.isSix
+              : point.kind === "six"
               ? "#10b981"
-              : point.isFour
+              : point.kind === "four"
               ? "#3b82f6"
               : "#64748b";
 
-            const radius = isSelected ? 5.5 : (point.isWicket || point.isSix ? 4 : 3);
+            const radius = isSelected ? 5.5 : (point.kind === "wicket" || point.kind === "six" ? 4 : 3);
+            const ballItem = balls[point.idx];
 
             return (
               <g
                 key={point.idx}
-                className="cursor-pointer"
+                role="button"
+                tabIndex={0}
+                aria-label={`Over ${ballItem?.over}.${ballItem?.ball}: ${ballItem?.runs} runs, Win probability ${Math.round((ballItem?.winProbability ?? 0.5) * 100)}%`}
+                className="cursor-pointer focus:outline-none"
                 onClick={() => handlePointClick(point.idx)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handlePointClick(point.idx);
+                  }
+                }}
                 onMouseEnter={() => setHoveredIdx(point.idx)}
                 onMouseLeave={() => setHoveredIdx(null)}
               >

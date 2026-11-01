@@ -14,9 +14,17 @@ import { ApiResponse, RecapPayload, SpoilerLevel } from "@/types";
 export const maxDuration = 15;
 export const dynamic = "force-dynamic";
 
-// Bounded in-memory cache with eviction to prevent unbounded memory growth (Bug 7)
-const MAX_CACHE_SIZE = 120;
-const recapCache = new Map<string, { payload: RecapPayload; usedFallback: boolean }>();
+// Bounded in-memory LRU cache with TTL to prevent unbounded memory growth (Optimization B)
+const MAX_CACHE_SIZE = 100;
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+
+interface CacheEntry {
+  payload: RecapPayload;
+  usedFallback: boolean;
+  timestamp: number;
+}
+
+const recapCache = new Map<string, CacheEntry>();
 
 // In-flight request map for de-duplicating concurrent identical calls
 const inFlightRequests = new Map<string, Promise<{ payload: RecapPayload; usedFallback: boolean }>>();
@@ -38,12 +46,45 @@ function checkRateLimit(clientKey: string): boolean {
   return true;
 }
 
+function getFromCache(key: string): CacheEntry | null {
+  const entry = recapCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    recapCache.delete(key);
+    return null;
+  }
+  // LRU touch: re-insert at end
+  recapCache.delete(key);
+  recapCache.set(key, entry);
+  return entry;
+}
+
 function setBoundedCache(key: string, value: { payload: RecapPayload; usedFallback: boolean }) {
   if (recapCache.size >= MAX_CACHE_SIZE) {
     const firstKey = recapCache.keys().next().value;
     if (firstKey) recapCache.delete(firstKey);
   }
-  recapCache.set(key, value);
+  recapCache.set(key, { ...value, timestamp: Date.now() });
+}
+
+function redactPayloadForSpoiler(payload: RecapPayload, level: SpoilerLevel): RecapPayload {
+  if (level !== "story-only") {
+    return { ...payload, spoilerLevel: level };
+  }
+
+  // Pure story only: zero scores, targets, and numeric run counts
+  return {
+    ...payload,
+    spoilerLevel: "story-only",
+    oneLiner: payload.oneLiner.replace(/\b\d+\/\d+\b/g, "").replace(/\b\d+\s+runs\b/gi, "crucial runs"),
+    story: payload.story.replace(/\b\d+\/\d+\b/g, "").replace(/\bneeding\s+\d+\s+runs\s+from\s+\d+\s+deliveries\b/gi, "chasing the target"),
+    hinglishOneLiner: payload.hinglishOneLiner?.replace(/\b\d+\/\d+\b/g, ""),
+    hinglishStory: payload.hinglishStory?.replace(/\b\d+\/\d+\b/g, ""),
+    whatToWatchNext: payload.whatToWatchNext ? {
+      ...payload.whatToWatchNext,
+      equation: "Chase ongoing",
+    } : undefined,
+  };
 }
 
 function errorResponse(code: string, message: string, status: number) {
@@ -136,13 +177,14 @@ export async function POST(req: NextRequest) {
     const toDisplay = toFraction > 0 ? Number(toOver.toFixed(1)) : toCompleted;
     const normalizedSpoilerLevel = spoilerLevel as SpoilerLevel;
 
-    // 6. Cache key: Normalized per match, window and spoilerLevel (Bug 7)
-    const cacheKey = `${meta.matchId}:${fromOver}:${toDisplay}:${normalizedSpoilerLevel}`;
-    if (recapCache.has(cacheKey)) {
-      const cachedEntry = recapCache.get(cacheKey)!;
+    // 6. Cache key: Normalized per match & window, omitting spoilerLevel/language (Optimization B)
+    const cacheKey = `${meta.matchId}:${fromOver}:${toDisplay}`;
+    const cachedEntry = getFromCache(cacheKey);
+    if (cachedEntry) {
+      const redacted = redactPayloadForSpoiler(cachedEntry.payload, normalizedSpoilerLevel);
       const res: ApiResponse<RecapPayload> = {
         success: true,
-        data: cachedEntry.payload,
+        data: redacted,
         meta: {
           matchId: meta.matchId,
           usedFallback: cachedEntry.usedFallback,
@@ -360,9 +402,10 @@ export async function POST(req: NextRequest) {
 
     try {
       const { payload, usedFallback } = await executionPromise;
+      const deliveredPayload = redactPayloadForSpoiler(payload, normalizedSpoilerLevel);
       const res: ApiResponse<RecapPayload> = {
         success: true,
-        data: payload,
+        data: deliveredPayload,
         meta: {
           matchId: meta.matchId,
           usedFallback, // Correct boolean status (Bug 10)

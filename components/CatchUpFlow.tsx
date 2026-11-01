@@ -29,6 +29,7 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
   const [fromOver, setFromOver] = useState<number>(5); // default over index 5 (Over 6)
   const [toOver, setToOver] = useState<number>(meta.currentLiveOver);
   const [selectedSpoilerLevel, setSelectedSpoilerLevel] = useState<SpoilerLevel>("story-and-score");
+  const [isWholeMatch, setIsWholeMatch] = useState<boolean>(false);
   const [holdBackAlerts, setHoldBackAlerts] = useState<boolean>(true);
   const [recapData, setRecapData] = useState<RecapPayload | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -55,15 +56,19 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
     selectedFrom: number, 
     selectedTo: number, 
     spoilerLevel: SpoilerLevel = "story-and-score",
-    isWholeMatch?: boolean,
+    isWhole = false,
     holdAlerts = true
   ) => {
     setFromOver(selectedFrom);
     setToOver(selectedTo);
     setSelectedSpoilerLevel(spoilerLevel);
+    setIsWholeMatch(isWhole);
     setHoldBackAlerts(holdAlerts);
     setAppState("loading");
     setErrorMessage(null);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9500);
 
     try {
       const res = await fetch("/api/recap", {
@@ -74,8 +79,9 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
           fromOver: selectedFrom,
           toOver: selectedTo,
           spoilerLevel,
-          isWholeMatch: !!isWholeMatch,
+          isWholeMatch: !!isWhole,
         }),
+        signal: controller.signal,
       });
 
       const json = await res.json();
@@ -88,10 +94,15 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
       setAppState("recap");
     } catch (err: any) {
       console.error("Error generating catch up recap:", err);
+      const isTimeout = err?.name === "AbortError";
       setErrorMessage(
-        err?.message || "Could not generate catch-up right now. Please retry."
+        isTimeout 
+          ? "Request timed out. Please retry or skip directly to the live match."
+          : (err?.message || "Could not generate catch-up right now. Please retry.")
       );
       setAppState("error");
+    } finally {
+      clearTimeout(timer);
     }
   };
 
@@ -133,6 +144,16 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
           <p className="text-xs text-slate-400">
             Finding key moments and momentum shifts...
           </p>
+
+          <div className="mt-6">
+            <button
+              type="button"
+              onClick={handleJumpToLiveDirect}
+              className="text-xs text-slate-400 hover:text-white underline underline-offset-4 transition-colors"
+            >
+              Skip directly to live match
+            </button>
+          </div>
         </div>
       )}
 
@@ -156,6 +177,7 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
           meta={meta}
           balls={balls}
           sessionToken={sessionToken}
+          fantasyImpact={recapData?.fantasyImpact}
           onBackToRecap={handleBackToRecap}
           onResetToGate={handleBackToGate}
         />
@@ -176,7 +198,7 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
           <div className="flex items-center justify-center gap-2">
             <button
               type="button"
-              onClick={() => handleStartCatchUp(fromOver, toOver, selectedSpoilerLevel)}
+              onClick={() => handleStartCatchUp(fromOver, toOver, selectedSpoilerLevel, isWholeMatch, holdBackAlerts)}
               className="px-3.5 py-2 rounded-chip bg-brand-surface border border-brand-border text-xs font-medium text-slate-200 hover:text-white flex items-center gap-1.5 transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />

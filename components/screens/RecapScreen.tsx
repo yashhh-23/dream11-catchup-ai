@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Ball, MatchMeta, RecapPayload, LanguageMode } from "@/types";
 import { WinProbChart } from "@/components/charts/WinProbChart";
 import { EVENT_STYLE } from "@/lib/matchUtils";
@@ -48,9 +48,14 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [language, setLanguage] = useState<LanguageMode>("en");
   const [showRank, setShowRank] = useState(false);
-  const [revealedMomentsCount, setRevealedMomentsCount] = useState(1);
-  const [activeVideoModal, setActiveVideoModal] = useState<{ title: string; over: string } | null>(null);
-  const [feedbackGiven, setFeedbackGiven] = useState<"up" | "down" | null>(null);
+  const [activeVideoModal, setActiveVideoModal] = useState<{ title: string; over: string; duration?: string } | null>(null);
+  const [feedbackGiven, setFeedbackGiven] = useState<"up" | "down" | null>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("dream11_recap_feedback");
+      if (saved === "up" || saved === "down") return saved;
+    }
+    return null;
+  });
 
   const stopSpeech = () => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
@@ -76,8 +81,29 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
 
     return () => {
       stopSpeech();
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeVideoModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActiveVideoModal(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeVideoModal]);
+
+  const handleFeedback = (type: "up" | "down") => {
+    setFeedbackGiven(type);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("dream11_recap_feedback", type);
+      } catch {}
+    }
+  };
 
   const handleLanguageChange = (newLang: LanguageMode) => {
     if (isPlayingAudio) {
@@ -274,8 +300,14 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
                     <span>{fantasy.rankBefore}</span>
                     <span>→</span>
                     <span>{fantasy.rankAfter}</span>
-                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1 py-0.2 rounded font-semibold ml-1">
-                      ▲ Huge jump
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ml-1 ${
+                      fantasy.rankDirection === "down"
+                        ? "bg-rose-500/20 text-rose-300"
+                        : fantasy.rankDirection === "same"
+                        ? "bg-slate-700/40 text-slate-300"
+                        : "bg-emerald-500/20 text-emerald-300"
+                    }`}>
+                      {fantasy.rankDirection === "down" ? "▼ Rank dropped" : fantasy.rankDirection === "same" ? "● Rank steady" : "▲ Rank jump"}
                     </span>
                   </span>
                 ) : (
@@ -370,99 +402,106 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold text-slate-300">
-              Key moments ({Math.min(revealedMomentsCount, recap.top3Moments.length)} of {recap.top3Moments.length} revealed)
+              Key moments in chronological order ({recap.top3Moments.length} turning points)
             </h3>
-            {revealedMomentsCount < recap.top3Moments.length && (
-              <button
-                type="button"
-                onClick={() => setRevealedMomentsCount(recap.top3Moments.length)}
-                className="text-[11px] text-slate-400 hover:text-slate-200 transition-colors"
-              >
-                Reveal all moments
-              </button>
-            )}
           </div>
 
           <div className="space-y-2.5">
-            {recap.top3Moments.slice(0, revealedMomentsCount).map((moment, idx) => {
-              const kind = moment.label === "WICKET" ? "wicket" : moment.label === "SIX" ? "six" : "four";
-              const swingVal = Math.round(moment.swingDelta * 100);
-              const isPositive = moment.winProbAfter > moment.winProbBefore;
+            {[...recap.top3Moments]
+              .sort((a, b) => parseFloat(a.over) - parseFloat(b.over))
+              .map((moment, idx) => {
+                const isWicket = moment.label === "WICKET";
+                const isSix = moment.label === "SIX";
+                const isFour = moment.label === "BOUNDARY";
+                const isCritical = moment.label === "CRITICAL MOMENT";
 
-              return (
-                <div
-                  key={idx}
-                  className="p-3.5 rounded-chip bg-brand-bg border border-brand-border space-y-2 text-xs"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-slate-200">
-                          Over {moment.over}
-                        </span>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${EVENT_STYLE[kind].badge}`}>
-                          {EVENT_STYLE[kind].label}
-                        </span>
-                        <span className="text-slate-200 font-medium">
-                          {moment.player}
-                        </span>
+                const kind = isWicket ? "wicket" : isSix ? "six" : isFour ? "four" : "run";
+                const swingVal = Math.round(moment.swingDelta * 100);
+                const isPositive = moment.winProbAfter > moment.winProbBefore;
+
+                return (
+                  <div
+                    key={idx}
+                    className="p-3.5 rounded-chip bg-brand-bg border border-brand-border space-y-2 text-xs"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-200">
+                            Over {moment.over}
+                          </span>
+                          {isCritical ? (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                              MOMENTUM SHIFT
+                            </span>
+                          ) : (
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${EVENT_STYLE[kind].badge}`}>
+                              {EVENT_STYLE[kind].label}
+                            </span>
+                          )}
+                          <span className="text-slate-200 font-medium">
+                            {moment.player}
+                          </span>
+                        </div>
+
+                        <div className="text-slate-300 leading-normal">
+                          {moment.description}
+                        </div>
+
+                        <div className="text-slate-400 text-[11px]">
+                          {moment.impact}
+                        </div>
                       </div>
 
-                      <div className="text-slate-300 leading-normal">
-                        {moment.description}
-                      </div>
-
-                      <div className="text-slate-400 text-[11px]">
-                        {moment.impact}
+                      <div className="text-right shrink-0 pt-0.5">
+                        <div
+                          className={`tabular-nums font-bold text-sm flex items-center justify-end gap-1 ${
+                            swingVal === 0
+                              ? "text-slate-400"
+                              : isPositive
+                              ? "text-emerald-400"
+                              : "text-rose-400"
+                          }`}
+                        >
+                          {swingVal === 0 ? (
+                            <span>0%</span>
+                          ) : (
+                            <>
+                              {isPositive ? (
+                                <TrendingUp className="w-3.5 h-3.5" />
+                              ) : (
+                                <TrendingDown className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {isPositive ? `+${swingVal}%` : `-${swingVal}%`}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          win swing
+                        </div>
                       </div>
                     </div>
 
-                    <div className="text-right shrink-0 pt-0.5">
-                      <div
-                        className={`tabular-nums font-bold text-sm flex items-center justify-end gap-1 ${
-                          isPositive ? "text-emerald-400" : "text-rose-400"
-                        }`}
+                    <div className="pt-2 border-t border-brand-border/60 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setActiveVideoModal({
+                          title: `${moment.player} · ${moment.label}`,
+                          over: moment.over,
+                          duration: moment.videoClip?.duration || "0:14"
+                        })}
+                        className="text-[11px] font-medium text-slate-300 hover:text-white flex items-center gap-1.5 transition-colors px-2 py-1 rounded bg-brand-surface border border-brand-border"
                       >
-                        {isPositive ? (
-                          <TrendingUp className="w-3.5 h-3.5" />
-                        ) : (
-                          <TrendingDown className="w-3.5 h-3.5" />
-                        )}
-                        <span>
-                          {isPositive ? `+${swingVal}%` : `-${swingVal}%`}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-500">
-                        win swing
-                      </div>
+                        <Play className="w-3 h-3 text-brand-red fill-brand-red" />
+                        <span>Watch {moment.videoClip?.duration || "0:14"} replay clip</span>
+                      </button>
+                      <span className="text-[10px] text-slate-500">{moment.videoClip?.duration || "0:14"} clip · FanCode stream</span>
                     </div>
                   </div>
-
-                  <div className="pt-2 border-t border-brand-border/60 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => setActiveVideoModal({ title: `${moment.player} · ${moment.label}`, over: moment.over })}
-                      className="text-[11px] font-medium text-slate-300 hover:text-white flex items-center gap-1.5 transition-colors px-2 py-1 rounded bg-brand-surface border border-brand-border"
-                    >
-                      <Play className="w-3 h-3 text-brand-red fill-brand-red" />
-                      <span>Watch 10s replay clip</span>
-                    </button>
-                    <span className="text-[10px] text-slate-500">0:14 clip · FanCode stream</span>
-                  </div>
-                </div>
-              );
-            })}
-
-            {revealedMomentsCount < recap.top3Moments.length && (
-              <button
-                type="button"
-                onClick={() => setRevealedMomentsCount(prev => prev + 1)}
-                className="w-full py-2.5 rounded-chip border border-brand-border bg-brand-bg hover:bg-brand-surface text-xs font-semibold text-slate-200 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <span>Reveal next turning point ({revealedMomentsCount + 1} of {recap.top3Moments.length})</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            )}
+                );
+              })}
           </div>
         </div>
 
@@ -499,7 +538,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
               <>
                 <button
                   type="button"
-                  onClick={() => setFeedbackGiven("up")}
+                  onClick={() => handleFeedback("up")}
                   className="p-1.5 rounded-md hover:bg-brand-border text-slate-300 hover:text-white transition-colors"
                   title="Yes, caught up"
                 >
@@ -507,7 +546,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setFeedbackGiven("down")}
+                  onClick={() => handleFeedback("down")}
                   className="p-1.5 rounded-md hover:bg-brand-border text-slate-300 hover:text-white transition-colors"
                   title="No, missed details"
                 >
@@ -521,13 +560,23 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
 
       {/* Video Modal */}
       {activeVideoModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-brand-surface border border-brand-border rounded-container max-w-sm w-full p-4 space-y-3">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="video-modal-title"
+          onClick={() => setActiveVideoModal(null)}
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 cursor-pointer"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-brand-surface border border-brand-border rounded-container max-w-sm w-full p-4 space-y-3 cursor-default"
+          >
             <div className="flex items-center justify-between pb-2 border-b border-brand-border">
-              <span className="text-xs font-semibold text-white">{activeVideoModal.title}</span>
+              <span id="video-modal-title" className="text-xs font-semibold text-white">{activeVideoModal.title}</span>
               <button
                 type="button"
                 onClick={() => setActiveVideoModal(null)}
+                aria-label="Close replay modal"
                 className="text-slate-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
@@ -540,7 +589,7 @@ export const RecapScreen: React.FC<RecapScreenProps> = ({
               </div>
               <div className="absolute bottom-2 left-2 right-2 flex justify-between text-[10px] text-white z-10">
                 <span>Over {activeVideoModal.over} · Replay clip</span>
-                <span>0:14 HD</span>
+                <span>{activeVideoModal.duration || "0:14"} HD</span>
               </div>
             </div>
             <p className="text-[11px] text-slate-300">

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { Ball, MatchMeta } from "@/types";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { Ball, MatchMeta, FantasyTeamPerformance } from "@/types";
 import { classifyBall, EVENT_STYLE } from "@/lib/matchUtils";
 import {
   ArrowLeft,
@@ -18,6 +18,7 @@ interface LiveViewProps {
   meta: MatchMeta;
   balls: Ball[];
   sessionToken?: string;
+  fantasyImpact?: FantasyTeamPerformance;
   onBackToRecap: () => void;
   onResetToGate: () => void;
 }
@@ -39,6 +40,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
   meta,
   balls: initialBalls,
   sessionToken,
+  fantasyImpact,
   onBackToRecap,
   onResetToGate,
 }) => {
@@ -50,14 +52,21 @@ export const LiveView: React.FC<LiveViewProps> = ({
   const [showDemoControls, setShowDemoControls] = useState<boolean>(false);
   const [isFinished, setIsFinished] = useState<boolean>(false);
 
+  const isFetchingRef = useRef<boolean>(false);
+  const liveBallsRef = useRef<Ball[]>(initialBalls);
+  liveBallsRef.current = liveBalls;
+
   const currentBall = liveBalls[currentIndex] || liveBalls[liveBalls.length - 1];
 
   const fetchNextDelta = useCallback(async (targetIdx: number) => {
-    if (targetIdx < liveBalls.length) {
+    if (isFetchingRef.current) return;
+
+    if (targetIdx < liveBallsRef.current.length) {
       setCurrentIndex(targetIdx);
       return;
     }
 
+    isFetchingRef.current = true;
     try {
       const tokenQuery = sessionToken ? `&token=${encodeURIComponent(sessionToken)}` : "";
       const res = await fetch(`/api/match/delta?matchId=${meta.matchId}&index=${targetIdx}${tokenQuery}`);
@@ -79,18 +88,23 @@ export const LiveView: React.FC<LiveViewProps> = ({
     } catch (e) {
       console.warn("Could not fetch next delta ball:", e);
       setIsPlayingAuto(false);
+    } finally {
+      isFetchingRef.current = false;
     }
-  }, [liveBalls.length, meta.matchId, sessionToken]);
+  }, [meta.matchId, sessionToken]);
 
   useEffect(() => {
     if (!isPlayingAuto || isFinished) return;
 
     const timer = setInterval(() => {
-      fetchNextDelta(currentIndex + 1);
+      setCurrentIndex(prev => {
+        fetchNextDelta(prev + 1);
+        return prev;
+      });
     }, 4500);
 
     return () => clearInterval(timer);
-  }, [isPlayingAuto, isFinished, currentIndex, fetchNextDelta]);
+  }, [isPlayingAuto, isFinished, fetchNextDelta]);
 
   const handleStepNext = () => {
     if (!isFinished) {
@@ -104,20 +118,22 @@ export const LiveView: React.FC<LiveViewProps> = ({
   };
 
   const totalTarget = meta.target;
-  const currentRuns = currentBall?.cumulativeScore ?? 124;
-  const currentWickets = currentBall?.cumulativeWickets ?? 3;
+  const currentRuns = currentBall ? currentBall.cumulativeScore : 0;
+  const currentWickets = currentBall ? currentBall.cumulativeWickets : 0;
   const runsNeeded = Math.max(0, totalTarget - currentRuns);
 
-  const ballsCompleted = ((currentBall?.over ?? 14) * 6) + (currentBall?.ball ?? 2);
+  const ballsCompleted = currentBall ? (currentBall.over * 6 + currentBall.ball) : 0;
   const ballsRemaining = Math.max(0, (meta.totalOvers * 6) - ballsCompleted);
 
   const crr = ballsCompleted > 0 ? ((currentRuns / ballsCompleted) * 6).toFixed(2) : "0.0";
   const rrr = ballsRemaining > 0 ? ((runsNeeded / ballsRemaining) * 6).toFixed(2) : "0.0";
-  const winProb = Math.round((currentBall?.winProbability ?? 0.8) * 100);
+  const winProb = Math.round((currentBall?.winProbability ?? 0.5) * 100);
 
-  // Deliveries strictly belonging to the current over up to current ball
-  const currentOverBalls = liveBalls.filter(
-    b => b.over === currentBall.over && b.ball <= currentBall.ball
+  // Deliveries strictly belonging to the current over up to current ball (Optimization F: O(1) slice instead of O(N) filter)
+  const ballsInCurrentOver = currentBall ? currentBall.ball : 1;
+  const currentOverBalls = liveBalls.slice(
+    Math.max(0, currentIndex - ballsInCurrentOver + 1),
+    currentIndex + 1
   );
 
   return (
@@ -134,10 +150,17 @@ export const LiveView: React.FC<LiveViewProps> = ({
         </button>
 
         <div className="flex items-center gap-2">
-          <span className="text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/25 px-2 py-0.5 rounded flex items-center gap-1 font-medium">
-            <Trophy className="w-3 h-3 text-amber-400" />
-            <span>IndiaXI · 482 pts</span>
-          </span>
+          {fantasyImpact ? (
+            <span className="text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/25 px-2 py-0.5 rounded flex items-center gap-1 font-medium">
+              <Trophy className="w-3 h-3 text-amber-400" />
+              <span>{fantasyImpact.teamName} · {fantasyImpact.phasePoints} pts</span>
+            </span>
+          ) : (
+            <span className="text-[11px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1 font-medium">
+              <Trophy className="w-3 h-3 text-slate-500" />
+              <span>Match Live</span>
+            </span>
+          )}
 
           <button
             type="button"

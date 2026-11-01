@@ -180,50 +180,56 @@ export function getTopMomentsFallback(
     const priorityBoost = kind === "wicket" ? 0.25 : (kind === "six" ? 0.15 : (kind === "four" ? 0.08 : 0));
     const priorityScore = delta + priorityBoost;
 
+    // Fixed-size insertion sort (O(1) space, no full-array sort or intermediate allocations)
     if (top.length < maxMoments) {
-      top.push({ ball: cur, prevProb, priorityScore, kind });
-      top.sort((a, b) => b.priorityScore - a.priorityScore);
+      let insIdx = top.length;
+      while (insIdx > 0 && top[insIdx - 1].priorityScore < priorityScore) insIdx--;
+      top.splice(insIdx, 0, { ball: cur, prevProb, priorityScore, kind });
     } else if (priorityScore > top[top.length - 1].priorityScore) {
-      top[top.length - 1] = { ball: cur, prevProb, priorityScore, kind };
-      top.sort((a, b) => b.priorityScore - a.priorityScore);
+      let insIdx = top.length - 1;
+      while (insIdx > 0 && top[insIdx - 1].priorityScore < priorityScore) insIdx--;
+      top.pop();
+      top.splice(insIdx, 0, { ball: cur, prevProb, priorityScore, kind });
     }
   }
 
-  return top.map(({ ball, prevProb, kind }) => {
-    let label: TurningPointMoment["label"] = "CRITICAL MOMENT";
-    let desc = ball.commentary;
-    let impact = "Shifted the match momentum significantly.";
+  return top.map(formatMomentCandidate);
+}
 
-    if (kind === "wicket") {
-      label = "WICKET";
-      desc = `${ball.dismissedPlayer || ball.batter} dismissed (${ball.wicketType || "out"}).`;
-      impact = `Major breakthrough for the bowling attack. Win probability dropped to ${formatWinProb(ball.winProbability)}.`;
-    } else if (kind === "six") {
-      label = "SIX";
-      desc = `Massive SIX by ${ball.batter} off ${ball.bowler}.`;
-      impact = "Counter-attacking blow that injected vital momentum into the chase.";
-    } else if (kind === "four") {
-      label = "BOUNDARY";
-      desc = `Boundary struck by ${ball.batter} off ${ball.bowler}.`;
-      impact = "Relieved required-rate pressure.";
-    }
+function formatMomentCandidate({ ball, prevProb, kind }: MomentCandidate): TurningPointMoment {
+  let label: TurningPointMoment["label"] = "CRITICAL MOMENT";
+  let desc = ball.commentary;
+  let impact = "Shifted the match momentum significantly.";
 
-    return {
-      over: formatOver(ball.over, ball.ball),
-      label,
-      player: ball.wicket ? (ball.dismissedPlayer || ball.batter) : ball.batter,
-      description: desc,
-      impact,
-      winProbBefore: prevProb,
-      winProbAfter: ball.winProbability,
-      swingDelta: Math.abs(ball.winProbability - prevProb),
-      videoClip: {
-        title: `${ball.wicket ? (ball.dismissedPlayer || ball.batter) : ball.batter} · ${label} (${formatOver(ball.over, ball.ball)} ov)`,
-        duration: "0:14",
-        actionType: (kind === "wicket" ? "wicket" : kind === "six" ? "six" : "boundary") as "wicket" | "six" | "boundary",
-      },
-    };
-  });
+  if (kind === "wicket") {
+    label = "WICKET";
+    desc = `${ball.dismissedPlayer || ball.batter} dismissed (${ball.wicketType || "out"}).`;
+    impact = `Major breakthrough for the bowling attack. Win probability dropped to ${formatWinProb(ball.winProbability)}.`;
+  } else if (kind === "six") {
+    label = "SIX";
+    desc = `Massive SIX by ${ball.batter} off ${ball.bowler}.`;
+    impact = "Counter-attacking blow that injected vital momentum into the chase.";
+  } else if (kind === "four") {
+    label = "BOUNDARY";
+    desc = `Boundary struck by ${ball.batter} off ${ball.bowler}.`;
+    impact = "Relieved required-rate pressure.";
+  }
+
+  return {
+    over: formatOver(ball.over, ball.ball),
+    label,
+    player: ball.wicket ? (ball.dismissedPlayer || ball.batter) : ball.batter,
+    description: desc,
+    impact,
+    winProbBefore: prevProb,
+    winProbAfter: ball.winProbability,
+    swingDelta: Math.abs(ball.winProbability - prevProb),
+    videoClip: {
+      title: `${ball.wicket ? (ball.dismissedPlayer || ball.batter) : ball.batter} · ${label} (${formatOver(ball.over, ball.ball)} ov)`,
+      duration: "0:14",
+      actionType: (kind === "wicket" ? "wicket" : kind === "six" ? "six" : "boundary") as "wicket" | "six" | "boundary",
+    },
+  };
 }
 
 export function calculateOverStats(balls: Ball[]) {
@@ -268,19 +274,32 @@ export function calculateOverStats(balls: Ball[]) {
 }
 
 /**
- * Fused single-pass window processing:
- * Executes slicing, stats calculation, running top-3 priority tracking,
- * and player extraction in one fused O(k) pass with O(1) extra space.
+ * Truly fused single-pass window processing (Optimization C & I):
+ * Executes slicing, stats calculation, running top-3 moments tracking,
+ * and player extraction in one fused O(k) forward scan with O(1) auxiliary space.
  */
 export function processWindowFused(balls: Ball[], fromOver: number, toOver: number) {
-  // Find start index in original balls array to identify previous delivery
+  if (!balls || balls.length === 0 || fromOver >= toOver) {
+    return {
+      missedBalls: [],
+      stats: calculateOverStats([]),
+      topMoments: [],
+      battersInPhase: [],
+      dismissedInPhase: [],
+      initialPrevProb: 0.50,
+    };
+  }
+
+  const toCompleted = Math.floor(toOver);
+  const toFraction = Math.round((toOver - toCompleted) * 10);
+
+  // Fast forward scan to find start delivery index
   let startIdx = 0;
   while (startIdx < balls.length && balls[startIdx].over < fromOver) {
     startIdx++;
   }
 
-  const missedBalls = sliceBalls(balls, fromOver, toOver);
-  if (missedBalls.length === 0) {
+  if (startIdx >= balls.length) {
     return {
       missedBalls: [],
       stats: calculateOverStats([]),
@@ -294,21 +313,75 @@ export function processWindowFused(balls: Ball[], fromOver: number, toOver: numb
   // Preceding ball probability before the window starts (fixes bug 14)
   const initialPrevProb = startIdx > 0 && balls[startIdx - 1]
     ? balls[startIdx - 1].winProbability
-    : (missedBalls[0].over === 0 && missedBalls[0].ball === 1 ? 0.50 : missedBalls[0].winProbability);
+    : (balls[0]?.over === 0 && balls[0]?.ball === 1 ? 0.50 : (balls[startIdx]?.winProbability ?? 0.50));
 
-  const stats = calculateOverStats(missedBalls);
-  const topMoments = getTopMomentsFallback(missedBalls, 3, initialPrevProb);
-
+  const missedBalls: Ball[] = [];
+  let runs = 0;
+  let wickets = 0;
+  let fours = 0;
+  let sixes = 0;
   const batterSet = new Set<string>();
   const dismissedList: string[] = [];
+  const topMomentsList: MomentCandidate[] = [];
 
-  for (let i = 0; i < missedBalls.length; i++) {
-    const b = missedBalls[i];
+  // Fused single pass over deliveries in the window
+  let idx = startIdx;
+  while (idx < balls.length) {
+    const b = balls[idx];
+    const inRange = toFraction > 0
+      ? (b.over < toCompleted || (b.over === toCompleted && b.ball <= toFraction))
+      : (b.over < toCompleted);
+    if (!inRange) break;
+
+    missedBalls.push(b);
+    runs += b.runs;
     batterSet.add(b.batter);
-    if (b.wicket) {
+
+    const kind = classifyBall(b);
+    if (kind === "wicket") {
+      wickets++;
       dismissedList.push(b.dismissedPlayer || b.batter);
+    } else if (kind === "four") {
+      fours++;
+    } else if (kind === "six") {
+      sixes++;
     }
+
+    // Running top-3 moments priority tracking in O(1) space with insertion
+    const prevProb = missedBalls.length > 1
+      ? missedBalls[missedBalls.length - 2].winProbability
+      : initialPrevProb;
+    const delta = Math.abs(b.winProbability - prevProb);
+    const priorityBoost = kind === "wicket" ? 0.25 : (kind === "six" ? 0.15 : (kind === "four" ? 0.08 : 0));
+    const priorityScore = delta + priorityBoost;
+
+    if (topMomentsList.length < 3) {
+      let insIdx = topMomentsList.length;
+      while (insIdx > 0 && topMomentsList[insIdx - 1].priorityScore < priorityScore) insIdx--;
+      topMomentsList.splice(insIdx, 0, { ball: b, prevProb, priorityScore, kind });
+    } else if (priorityScore > topMomentsList[2].priorityScore) {
+      let insIdx = 2;
+      while (insIdx > 0 && topMomentsList[insIdx - 1].priorityScore < priorityScore) insIdx--;
+      topMomentsList.pop();
+      topMomentsList.splice(insIdx, 0, { ball: b, prevProb, priorityScore, kind });
+    }
+
+    idx++;
   }
+
+  const oversCount = missedBalls.length / 6;
+  const runRate = oversCount > 0 ? Number((runs / oversCount).toFixed(2)) : 0;
+  const stats = {
+    runs,
+    wickets,
+    boundaries: fours,
+    sixes,
+    totalBalls: missedBalls.length,
+    runRate,
+    runRateFormatted: runRate.toFixed(2),
+  };
+
+  const topMoments = topMomentsList.map(formatMomentCandidate);
 
   return {
     missedBalls,
@@ -330,7 +403,6 @@ export function validateRecapAgainstBallData(
   maxAllowedOver?: number
 ): { valid: boolean; isValid: boolean; issues: string[] } {
   const issues: string[] = [];
-  const validOvers = new Set(balls.map(b => formatOver(b.over, b.ball)));
   const validPlayers = new Set<string>();
 
   for (let i = 0; i < balls.length; i++) {
@@ -353,8 +425,12 @@ export function validateRecapAgainstBallData(
 
   for (let idx = 0; idx < moments.length; idx++) {
     const m = moments[idx];
-    if (m.over && !validOvers.has(m.over)) {
-      issues.push(`Moment ${idx + 1} references over "${m.over}", which does not exist in the selected ball data.`);
+    if (m.over) {
+      // Direct search avoids allocating a Set and k strings on every request (Optimization C)
+      const overExists = balls.some(b => formatOver(b.over, b.ball) === m.over);
+      if (!overExists) {
+        issues.push(`Moment ${idx + 1} references over "${m.over}", which does not exist in the selected ball data.`);
+      }
     }
     if (m.player && !validPlayers.has(m.player)) {
       issues.push(`Moment ${idx + 1} references player "${m.player}", who was not part of this window.`);

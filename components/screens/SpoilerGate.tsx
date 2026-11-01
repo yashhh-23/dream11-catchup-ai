@@ -22,6 +22,13 @@ const PRESETS = [
   { id: 1, title: "Full match", desc: "From over 1 (Start)", isWhole: true },
 ] as const;
 
+const TIME_PRESETS = [
+  { id: "15m", label: "~15 mins", startOver: 11, desc: "From ov 11", isWhole: false },
+  { id: "30m", label: "~30 mins", startOver: 8, desc: "From ov 8", isWhole: false },
+  { id: "45m", label: "~45 mins", startOver: 5, desc: "From ov 5", isWhole: false },
+  { id: "whole", label: "Whole match", startOver: 1, desc: "From ov 1", isWhole: true },
+] as const;
+
 export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   meta,
   onCatchUp,
@@ -57,20 +64,6 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
     });
   };
 
-  // Prefetch default recap window (6 -> liveTargetOver) on gate load to make click instant
-  useEffect(() => {
-    fetch("/api/recap", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        matchId: meta.matchId,
-        fromOver: 5,
-        toOver: liveTargetOver,
-        spoilerLevel: "story-and-score",
-      }),
-    }).catch(() => {});
-  }, [meta.matchId, liveTargetOver]);
-
   const missedOversCount = Math.max(1, Math.floor(liveTargetOver) - selectedStartOver + 1);
   const readTimeEstimate = missedOversCount <= 5 ? "about 30 sec" : missedOversCount <= 10 ? "about 45 sec" : "about 1 min";
 
@@ -79,11 +72,9 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
     onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected, dndShieldActive);
   };
 
-  const handleTimeSelect = (minutes: number) => {
-    const oversMissed = Math.round(minutes / 4.2);
-    const calculatedStart = Math.max(1, Math.floor(liveTargetOver) - oversMissed);
-    setSelectedStartOver(calculatedStart);
-    setIsWholeMatchSelected(false);
+  const handleTimeSelect = (item: typeof TIME_PRESETS[number]) => {
+    setSelectedStartOver(item.startOver);
+    setIsWholeMatchSelected(item.isWhole);
   };
 
   return (
@@ -117,7 +108,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
           <div className="space-y-2.5">
             {[
-              { code: "NZ", name: meta.team1, score: "177/7", over: "(20.0)", badgeBg: "bg-slate-800 border-slate-700 text-slate-300", masked: false },
+              { code: "NZ", name: meta.team1, score: meta.target ? `${meta.target - 1}/7` : "177/7", over: "(20.0)", badgeBg: "bg-slate-800 border-slate-700 text-slate-300", masked: false },
               { code: "IND", name: meta.team2, score: "••• / •", over: `(${meta.currentLiveOver} ov)`, badgeBg: "bg-blue-900 border-blue-800 text-blue-200", masked: true },
             ].map((team, idx) => (
               <div
@@ -208,22 +199,24 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-              {[
-                { label: "~15 mins", mins: 15, overDesc: "Around ov 11" },
-                { label: "~30 mins", mins: 30, overDesc: "Around ov 8" },
-                { label: "~45 mins", mins: 45, overDesc: "Around ov 5" },
-                { label: "Whole match", mins: 90, overDesc: "From ov 1" },
-              ].map((item, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleTimeSelect(item.mins)}
-                  className="p-2.5 rounded-chip text-xs text-left bg-brand-bg border border-brand-border hover:bg-brand-surfaceHover text-slate-300 transition-colors"
-                >
-                  <div className="font-semibold text-white">{item.label}</div>
-                  <div className="text-[10px] text-slate-400">{item.overDesc}</div>
-                </button>
-              ))}
+              {TIME_PRESETS.map((item) => {
+                const isSelected = item.isWhole ? isWholeMatchSelected : selectedStartOver === item.startOver && !isWholeMatchSelected;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleTimeSelect(item)}
+                    className={`p-2.5 rounded-chip text-xs text-left border transition-colors ${
+                      isSelected
+                        ? "bg-brand-red text-white border-brand-red"
+                        : "bg-brand-bg border-brand-border hover:bg-brand-surfaceHover text-slate-300"
+                    }`}
+                  >
+                    <div className="font-semibold text-white">{item.label}</div>
+                    <div className="text-[10px] text-slate-400">{item.desc}</div>
+                  </button>
+                );
+              })}
             </div>
           )}
 
@@ -241,11 +234,15 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             {showCustomSlider && (
               <div className="mt-2.5 p-3 bg-brand-bg border border-brand-border rounded-chip space-y-2">
                 <div className="flex justify-between text-xs text-slate-300">
-                  <span>Start catch-up at:</span>
+                  <label htmlFor="fine-tune-start-over" className="text-xs text-slate-300">
+                    Start catch-up at:
+                  </label>
                   <span className="font-semibold text-white">Over {selectedStartOver}</span>
                 </div>
                 <input
+                  id="fine-tune-start-over"
                   type="range"
+                  aria-label="Fine-tune start over"
                   min={1}
                   max={Math.floor(liveTargetOver)}
                   step={1}
@@ -271,11 +268,11 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <div className="font-semibold text-amber-300 flex items-center gap-1.5">
-                <span>Spoiler-Free Thrill Rating: 9.4 / 10</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-200">Replay Worthy</span>
+                <span>Spoiler-Free Thrill Indicator</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-200">High Leverage</span>
               </div>
               <p className="text-slate-300 text-[11px] mt-0.5">
-                Went down to the wire with 3 dramatic momentum flips. Highly recommended to catch up or watch!
+                Multiple lead changes across the chase. Catch up safely from ball one without knowing the final winner.
               </p>
             </div>
           </div>
@@ -326,6 +323,8 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </div>
           <button
             type="button"
+            role="switch"
+            aria-checked={dndShieldActive}
             onClick={handleToggleDnd}
             aria-label="Toggle lock screen spoilers shield"
             className={`w-9 h-5 rounded-full transition-colors p-0.5 ${

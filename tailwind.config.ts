@@ -10,18 +10,18 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: [
+          "'Plus Jakarta Sans'",
+          "var(--font-sans)",
           "-apple-system",
           "BlinkMacSystemFont",
           "'Segoe UI'",
           "Roboto",
-          "'Helvetica Neue'",
-          "Arial",
           "sans-serif"
         ],
         display: [
           "'Barlow Condensed'",
+          "var(--font-display)",
           "'Rajdhani'",
-          "Impact",
           "-apple-system",
           "BlinkMacSystemFont",
           "sans-serif"
