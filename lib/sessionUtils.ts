@@ -1,6 +1,16 @@
 import crypto from "crypto";
 
-const SESSION_SECRET = process.env.SESSION_SECRET || "dream11-zero-spoiler-secret-key-2026";
+// Fallback in-memory random secret generated per server process during development/tests (never hardcoded in git)
+const DEV_FALLBACK_SECRET = crypto.randomBytes(32).toString("hex");
+
+function getSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (secret) return secret;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("CRITICAL_SECURITY_CONFIG_MISSING: SESSION_SECRET must be set in production.");
+  }
+  return DEV_FALLBACK_SECRET;
+}
 
 export interface SimulatorSession {
   matchId: string;
@@ -13,12 +23,12 @@ export interface SimulatorSession {
  */
 export function createSimulatorToken(matchId: string, baseIndex: number): string {
   const payload = `${matchId}:${baseIndex}:${Date.now()}`;
-  const hmac = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
+  const hmac = crypto.createHmac("sha256", getSessionSecret()).update(payload).digest("hex");
   return Buffer.from(`${payload}:${hmac}`).toString("base64url");
 }
 
 /**
- * Verifies the token signature and returns the session parameters.
+ * Verifies the token signature using timing-safe comparison and returns the session parameters.
  */
 export function verifySimulatorToken(token: string): { valid: boolean; session?: SimulatorSession; error?: string } {
   try {
@@ -30,9 +40,15 @@ export function verifySimulatorToken(token: string): { valid: boolean; session?:
 
     const [matchId, baseIndexStr, createdAtStr, receivedHmac] = parts;
     const payload = `${matchId}:${baseIndexStr}:${createdAtStr}`;
-    const expectedHmac = crypto.createHmac("sha256", SESSION_SECRET).update(payload).digest("hex");
+    const expectedHmac = crypto.createHmac("sha256", getSessionSecret()).update(payload).digest("hex");
 
-    if (receivedHmac !== expectedHmac) {
+    const expectedBuffer = Buffer.from(expectedHmac, "hex");
+    const receivedBuffer = Buffer.from(receivedHmac, "hex");
+
+    if (
+      expectedBuffer.length !== receivedBuffer.length ||
+      !crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
+    ) {
       return { valid: false, error: "INVALID_SIGNATURE" };
     }
 

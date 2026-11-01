@@ -104,8 +104,6 @@ export interface RecapPayload {
   fantasyImpact?: FantasyTeamPerformance;
   thrillRating?: ThrillRating;
   whatToWatchNext?: WhatToWatchNext;
-  hinglishOneLiner?: string;
-  hinglishStory?: string;
   spoilerLevel?: SpoilerLevel;
 }
 

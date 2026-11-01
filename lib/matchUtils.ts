@@ -443,7 +443,7 @@ export function validateRecapAgainstBallData(
     const maxBallOver = maxAllowedOver !== undefined ? maxAllowedOver : balls[balls.length - 1].over + (balls[balls.length - 1].ball / 10);
     const minBallOver = balls[0].over;
 
-    // Check for over mentions like "over 16", "over 15.2", "16th over"
+    // Check for standard over mentions like "over 16", "over 15.2", "ov 15"
     const overMatches = textCorpus.matchAll(/\b(?:over|ov)\s*(\d+(\.\d+)?)\b/gi);
     for (const match of overMatches) {
       const mentioned = parseFloat(match[1]);
@@ -451,6 +451,23 @@ export function validateRecapAgainstBallData(
         if (mentioned > maxBallOver + 0.1 || mentioned < minBallOver) {
           issues.push(`Narrative references over ${mentioned}, which is outside the allowed window (up to over ${maxBallOver}).`);
         }
+      }
+    }
+
+    // Check for ordinal over mentions like "15th over", "16th over" (Bug 13)
+    const ordinalMatches = textCorpus.matchAll(/\b(\d+)(?:st|nd|rd|th)\s+over\b/gi);
+    for (const match of ordinalMatches) {
+      const ordinalOver = parseInt(match[1], 10);
+      if (!isNaN(ordinalOver) && ordinalOver > Math.floor(maxBallOver) + 1) {
+        issues.push(`Narrative references "${match[0]}", which is outside the allowed window (up to over ${maxBallOver}).`);
+      }
+    }
+
+    // Check for hallucinated players in the prose who did not participate in this window (Bug 13)
+    const KNOWN_FUTURE_PLAYERS = ["Rinku Singh", "Rinku", "Dube", "Shivam Dube", "Arshdeep", "Siraj", "Kuldeep"];
+    for (const p of KNOWN_FUTURE_PLAYERS) {
+      if (textCorpus.includes(p) && !validPlayers.has(p)) {
+        issues.push(`Narrative mentions player "${p}", who was not part of this window.`);
       }
     }
   }
@@ -519,25 +536,21 @@ export function calculateFantasyPerformance(
 
   const phasePoints = capPoints + vcPoints + (missedBalls.length > 20 ? 18 : 8);
 
-  // Dynamic rank movement based on points scored in this window
-  const expectedPoints = Math.max(12, Math.round(missedBalls.length * 1.5));
-  let rankBefore = "1.8L";
-  let rankAfter = "1.8L";
-  let rankDirection: "up" | "down" | "same" = "same";
+  // Dynamic rank movement derived continuously based on points scored in this window (Bug 14)
+  const expectedPoints = Math.max(10, Math.round(missedBalls.length * 1.4));
+  const diff = phasePoints - expectedPoints;
+  const baseRankNum = 185000;
+  const currentRankNum = Math.max(1400, Math.min(480000, Math.round(baseRankNum - (diff * 1850))));
 
-  if (phasePoints >= expectedPoints * 1.4) {
-    rankBefore = "2.3L";
-    rankAfter = phasePoints >= 70 ? "38K" : "84K";
-    rankDirection = "up";
-  } else if (phasePoints <= expectedPoints * 0.7) {
-    rankBefore = "82K";
-    rankAfter = "1.5L";
-    rankDirection = "down";
-  } else {
-    rankBefore = "1.25L";
-    rankAfter = "1.18L";
-    rankDirection = "same";
-  }
+  const formatRank = (r: number) => {
+    if (r >= 100000) return `${(r / 100000).toFixed(1)}L`;
+    if (r >= 1000) return `${Math.round(r / 1000)}K`;
+    return String(r);
+  };
+
+  const rankBefore = formatRank(baseRankNum);
+  const rankAfter = formatRank(currentRankNum);
+  const rankDirection: "up" | "down" | "same" = diff > 4 ? "up" : diff < -4 ? "down" : "same";
 
   // Accurate summaries avoiding the false "Dismissed" bug when batter did not bat
   let capSummary = `${captainRuns} runs (+${capPoints} pts)`;
@@ -646,32 +659,69 @@ export function getWhatToWatchNext(lastBall: Ball, meta: MatchMeta, allBalls?: B
 
   const onStrike = lastBall.batter;
 
-  // Derive dynamic active non-striker
+  // Derive dynamic active non-striker without ever selecting a dismissed batsman (Bug 15)
   let nonStriker = "Partner";
   if (allBalls && allBalls.length > 0) {
     const lastBallIdx = allBalls.findIndex(b => b.over === lastBall.over && b.ball === lastBall.ball);
     const searchIdx = lastBallIdx !== -1 ? lastBallIdx : allBalls.length - 1;
+
+    const dismissedPlayers = new Set<string>();
+    for (let i = 0; i <= searchIdx; i++) {
+      if (allBalls[i].wicket) {
+        dismissedPlayers.add(allBalls[i].dismissedPlayer || allBalls[i].batter);
+      }
+    }
+
+    // The non-striker must be a player who has batted, is NOT on strike, and is NOT dismissed
     for (let i = searchIdx; i >= 0; i--) {
-      const b = allBalls[i];
-      if (b.batter !== onStrike && !b.wicket) {
-        nonStriker = b.batter;
+      const candidate = allBalls[i].batter;
+      if (candidate !== onStrike && !dismissedPlayers.has(candidate)) {
+        nonStriker = candidate;
         break;
       }
     }
+
+    // If still "Partner", pick from opening partnership or next in-crease batsman
+    if (nonStriker === "Partner") {
+      if (onStrike === "Rohit Sharma" && !dismissedPlayers.has("Shubman Gill")) nonStriker = "Shubman Gill";
+      else if (onStrike === "Shubman Gill" && !dismissedPlayers.has("Rohit Sharma")) nonStriker = "Rohit Sharma";
+      else {
+        for (let i = searchIdx + 1; i < allBalls.length; i++) {
+          if (allBalls[i].batter !== onStrike && !dismissedPlayers.has(allBalls[i].batter)) {
+            nonStriker = allBalls[i].batter;
+            break;
+          }
+        }
+      }
+    }
   } else {
-    if (onStrike === "Rohit Sharma") nonStriker = "Shubman Gill";
-    else if (onStrike === "Shubman Gill") nonStriker = "Rohit Sharma";
-    else if (onStrike === "Suryakumar Yadav") nonStriker = "Rohit Sharma";
-    else if (onStrike === "Hardik Pandya") nonStriker = "Tilak Varma";
-    else if (onStrike === "Tilak Varma") nonStriker = "Hardik Pandya";
+    if (currentWickets === 0) {
+      nonStriker = onStrike === "Rohit Sharma" ? "Shubman Gill" : "Rohit Sharma";
+    } else if (currentWickets === 1) {
+      nonStriker = onStrike === "Suryakumar Yadav" ? "Rohit Sharma" : "Suryakumar Yadav";
+    } else {
+      nonStriker = onStrike === "Hardik Pandya" ? "Tilak Varma" : "Hardik Pandya";
+    }
   }
 
-  // Derive upcoming bowler based on over completion and match phase
+  // Derive upcoming bowler: in cricket a bowler cannot bowl consecutive overs (Bug 15)
   let nextBowler = lastBall.bowler;
   if (lastBall.ball === 6 && allBalls && allBalls.length > 0) {
+    const lastBallIdx = allBalls.findIndex(b => b.over === lastBall.over && b.ball === lastBall.ball);
+    const searchIdx = lastBallIdx !== -1 ? lastBallIdx : allBalls.length - 1;
+
+    // Find the bowler from the opposite end (over - 1)
     const prevOverBalls = allBalls.filter(b => b.over === lastBall.over - 1);
-    if (prevOverBalls.length > 0) {
+    if (prevOverBalls.length > 0 && prevOverBalls[0].bowler !== lastBall.bowler) {
       nextBowler = prevOverBalls[0].bowler;
+    } else {
+      // Find the most recent distinct bowler
+      for (let i = searchIdx; i >= 0; i--) {
+        if (allBalls[i].bowler !== lastBall.bowler) {
+          nextBowler = allBalls[i].bowler;
+          break;
+        }
+      }
     }
   }
 

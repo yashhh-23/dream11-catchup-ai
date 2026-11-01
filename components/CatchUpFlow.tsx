@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { matchMeta as defaultMeta } from "@/lib/matchData";
 import { Ball, MatchMeta, RecapPayload, SpoilerLevel } from "@/types";
 import { SpoilerGate } from "@/components/screens/SpoilerGate";
@@ -33,6 +33,13 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
   const [holdBackAlerts, setHoldBackAlerts] = useState<boolean>(true);
   const [recapData, setRecapData] = useState<RecapPayload | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   // If initial balls were not supplied via SSR, fetch public-only deliveries from /api/match
   useEffect(() => {
@@ -67,7 +74,9 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
     setAppState("loading");
     setErrorMessage(null);
 
+    abortControllerRef.current?.abort();
     const controller = new AbortController();
+    abortControllerRef.current = controller;
     const timer = setTimeout(() => controller.abort(), 9500);
 
     try {
@@ -107,6 +116,7 @@ export const CatchUpFlow: React.FC<CatchUpFlowProps> = ({
   };
 
   const handleJumpToLiveDirect = () => {
+    abortControllerRef.current?.abort();
     setAppState("live");
   };
 

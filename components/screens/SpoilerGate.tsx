@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { MatchMeta, SpoilerLevel } from "@/types";
 import { Lock, ArrowRight, SlidersHorizontal, Clock, BellOff, Sparkles, ShieldCheck, X, CheckCircle2 } from "lucide-react";
 
@@ -22,13 +22,6 @@ const PRESETS = [
   { id: 1, title: "Full match", desc: "From over 1 (Start)", isWhole: true },
 ] as const;
 
-const TIME_PRESETS = [
-  { id: "15m", label: "~15 mins", startOver: 11, desc: "From ov 11", isWhole: false },
-  { id: "30m", label: "~30 mins", startOver: 8, desc: "From ov 8", isWhole: false },
-  { id: "45m", label: "~45 mins", startOver: 5, desc: "From ov 5", isWhole: false },
-  { id: "whole", label: "Whole match", startOver: 1, desc: "From ov 1", isWhole: true },
-] as const;
-
 export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   meta,
   onCatchUp,
@@ -44,6 +37,23 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   const [dndShieldActive, setDndShieldActive] = useState<boolean>(true);
   const [isWholeMatchSelected, setIsWholeMatchSelected] = useState<boolean>(false);
   const [showGuaranteeModal, setShowGuaranteeModal] = useState<boolean>(false);
+
+  const timePresets = useMemo(() => {
+    const live = meta.currentLiveOver;
+    const calcOver = (minsAway: number) => {
+      const oversAway = Math.round(minsAway / 4.2);
+      return Math.max(1, Math.floor(live) - oversAway);
+    };
+    const p15 = calcOver(15);
+    const p30 = calcOver(30);
+    const p45 = calcOver(45);
+    return [
+      { id: "15m", label: "~15 mins", startOver: p15, desc: `From ov ${p15}`, isWhole: false },
+      { id: "30m", label: "~30 mins", startOver: p30, desc: `From ov ${p30}`, isWhole: false },
+      { id: "45m", label: "~45 mins", startOver: p45, desc: `From ov ${p45}`, isWhole: false },
+      { id: "whole", label: "Whole match", startOver: 1, desc: "From ov 1", isWhole: true },
+    ];
+  }, [meta.currentLiveOver]);
 
   useEffect(() => {
     try {
@@ -72,7 +82,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
     onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected, dndShieldActive);
   };
 
-  const handleTimeSelect = (item: typeof TIME_PRESETS[number]) => {
+  const handleTimeSelect = (item: { id: string; label: string; startOver: number; desc: string; isWhole: boolean }) => {
     setSelectedStartOver(item.startOver);
     setIsWholeMatchSelected(item.isWhole);
   };
@@ -108,8 +118,22 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
           <div className="space-y-2.5">
             {[
-              { code: "NZ", name: meta.team1, score: meta.target ? `${meta.target - 1}/7` : "177/7", over: "(20.0)", badgeBg: "bg-slate-800 border-slate-700 text-slate-300", masked: false },
-              { code: "IND", name: meta.team2, score: "••• / •", over: `(${meta.currentLiveOver} ov)`, badgeBg: "bg-blue-900 border-blue-800 text-blue-200", masked: true },
+              {
+                code: meta.team1 ? meta.team1.slice(0, 3).toUpperCase() : "TM1",
+                name: meta.team1,
+                score: meta.target ? `${meta.target - 1}/7` : "1st Innings",
+                over: "(20.0)",
+                badgeBg: "bg-slate-800 border-slate-700 text-slate-300",
+                masked: false,
+              },
+              {
+                code: meta.team2 ? meta.team2.slice(0, 3).toUpperCase() : "TM2",
+                name: meta.team2,
+                score: "••• / •",
+                over: `(${meta.currentLiveOver} ov)`,
+                badgeBg: "bg-blue-900 border-blue-800 text-blue-200",
+                masked: true,
+              },
             ].map((team, idx) => (
               <div
                 key={team.code}
@@ -199,7 +223,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
-              {TIME_PRESETS.map((item) => {
+              {timePresets.map((item) => {
                 const isSelected = item.isWhole ? isWholeMatchSelected : selectedStartOver === item.startOver && !isWholeMatchSelected;
                 return (
                   <button

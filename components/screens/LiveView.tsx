@@ -51,10 +51,13 @@ export const LiveView: React.FC<LiveViewProps> = ({
   const [isPlayingAuto, setIsPlayingAuto] = useState<boolean>(false);
   const [showDemoControls, setShowDemoControls] = useState<boolean>(false);
   const [isFinished, setIsFinished] = useState<boolean>(false);
+  const [cadenceNotice, setCadenceNotice] = useState<string | null>(null);
 
   const isFetchingRef = useRef<boolean>(false);
   const liveBallsRef = useRef<Ball[]>(initialBalls);
   liveBallsRef.current = liveBalls;
+  const currentIndexRef = useRef<number>(initialLiveIndex);
+  currentIndexRef.current = currentIndex;
 
   const currentBall = liveBalls[currentIndex] || liveBalls[liveBalls.length - 1];
 
@@ -63,16 +66,22 @@ export const LiveView: React.FC<LiveViewProps> = ({
 
     if (targetIdx < liveBallsRef.current.length) {
       setCurrentIndex(targetIdx);
+      setCadenceNotice(null);
       return;
     }
 
     isFetchingRef.current = true;
     try {
-      const tokenQuery = sessionToken ? `&token=${encodeURIComponent(sessionToken)}` : "";
-      const res = await fetch(`/api/match/delta?matchId=${meta.matchId}&index=${targetIdx}${tokenQuery}`);
+      const headers: Record<string, string> = sessionToken
+        ? { "x-simulator-token": sessionToken }
+        : {};
+      const res = await fetch(`/api/match/delta?matchId=${meta.matchId}&index=${targetIdx}`, {
+        headers,
+      });
       const json = await res.json();
 
       if (json.success && json.data) {
+        setCadenceNotice(null);
         if (json.data.ball) {
           setLiveBalls(prev => [...prev, json.data.ball]);
           setCurrentIndex(targetIdx);
@@ -82,7 +91,9 @@ export const LiveView: React.FC<LiveViewProps> = ({
           setIsPlayingAuto(false);
         }
       } else if (!json.success && json.error) {
-        console.warn("Live delta locked or protected:", json.error.message);
+        if (res.status === 403) {
+          setCadenceNotice("Ball locked to real match cadence (~4.5s per delivery)");
+        }
         setIsPlayingAuto(false);
       }
     } catch (e) {
@@ -97,10 +108,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
     if (!isPlayingAuto || isFinished) return;
 
     const timer = setInterval(() => {
-      setCurrentIndex(prev => {
-        fetchNextDelta(prev + 1);
-        return prev;
-      });
+      fetchNextDelta(currentIndexRef.current + 1);
     }, 4500);
 
     return () => clearInterval(timer);
@@ -153,7 +161,7 @@ export const LiveView: React.FC<LiveViewProps> = ({
           {fantasyImpact ? (
             <span className="text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/25 px-2 py-0.5 rounded flex items-center gap-1 font-medium">
               <Trophy className="w-3 h-3 text-amber-400" />
-              <span>{fantasyImpact.teamName} · {fantasyImpact.phasePoints} pts</span>
+              <span>Phase pts: +{fantasyImpact.phasePoints}</span>
             </span>
           ) : (
             <span className="text-[11px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded flex items-center gap-1 font-medium">
@@ -172,6 +180,19 @@ export const LiveView: React.FC<LiveViewProps> = ({
           </button>
         </div>
       </header>
+
+      {cadenceNotice && (
+        <div className="mb-4 px-3 py-2 rounded-chip bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
+          <span>{cadenceNotice}</span>
+          <button
+            type="button"
+            onClick={() => setCadenceNotice(null)}
+            className="text-amber-400 hover:text-white font-bold text-xs ml-2"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Main Container */}
       <div className="bg-brand-surface border border-brand-border rounded-container p-5 sm:p-6 space-y-6">

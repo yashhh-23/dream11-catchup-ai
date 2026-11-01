@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json(response, {
     headers: {
-      "Cache-Control": "public, s-maxage=3, stale-while-revalidate=5",
+      "Cache-Control": "private, no-store",
     },
   });
 }

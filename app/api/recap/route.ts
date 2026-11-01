@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerMatchById } from "@/lib/serverMatchData";
 import { 
+  sliceBalls,
   processWindowFused,
   validateRecapAgainstBallData,
   calculateFantasyPerformance,
@@ -29,11 +30,16 @@ const recapCache = new Map<string, CacheEntry>();
 // In-flight request map for de-duplicating concurrent identical calls
 const inFlightRequests = new Map<string, Promise<{ payload: RecapPayload; usedFallback: boolean }>>();
 
-// Sliding-window rate limiter (Bug 7): Max 40 requests per minute per IP / token
+// Sliding-window rate limiter (Bug 7 & 8): Max 40 requests per minute per IP / token
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 
 function checkRateLimit(clientKey: string): boolean {
   const now = Date.now();
+  if (rateLimitMap.size > 150) {
+    for (const [k, v] of rateLimitMap.entries()) {
+      if (now > v.resetTime) rateLimitMap.delete(k);
+    }
+  }
   const record = rateLimitMap.get(clientKey);
   if (!record || now > record.resetTime) {
     rateLimitMap.set(clientKey, { count: 1, resetTime: now + 60000 });
@@ -67,22 +73,43 @@ function setBoundedCache(key: string, value: { payload: RecapPayload; usedFallba
   recapCache.set(key, { ...value, timestamp: Date.now() });
 }
 
-function redactPayloadForSpoiler(payload: RecapPayload, level: SpoilerLevel): RecapPayload {
+function redactPayloadForSpoiler(
+  base: RecapPayload,
+  level: SpoilerLevel,
+  fromDisplay: string | number,
+  toDisplay: string | number,
+  team2: string
+): RecapPayload {
   if (level !== "story-only") {
-    return { ...payload, spoilerLevel: level };
+    return { ...base, spoilerLevel: level };
   }
 
-  // Pure story only: zero scores, targets, and numeric run counts
+  // Pure story only: zero scores, targets, percentages, and numeric run counts (Bug 4 & 5)
   return {
-    ...payload,
+    ...base,
     spoilerLevel: "story-only",
-    oneLiner: payload.oneLiner.replace(/\b\d+\/\d+\b/g, "").replace(/\b\d+\s+runs\b/gi, "crucial runs"),
-    story: payload.story.replace(/\b\d+\/\d+\b/g, "").replace(/\bneeding\s+\d+\s+runs\s+from\s+\d+\s+deliveries\b/gi, "chasing the target"),
-    hinglishOneLiner: payload.hinglishOneLiner?.replace(/\b\d+\/\d+\b/g, ""),
-    hinglishStory: payload.hinglishStory?.replace(/\b\d+\/\d+\b/g, ""),
-    whatToWatchNext: payload.whatToWatchNext ? {
-      ...payload.whatToWatchNext,
-      equation: "Chase ongoing",
+    oneLiner: `${team2} weathered intense bowling pressure and mounted a spirited counter-attack across the middle overs.`,
+    story: `Between overs ${fromDisplay} and ${toDisplay}, the contest swung on fine margins. ${team2} lost crucial wickets but absorbed pressure with timely boundary hits to steady the innings. Both teams now enter the live overs with everything to play for.`,
+    top3Moments: base.top3Moments.map(m => ({
+      ...m,
+      winProbBefore: 0,
+      winProbAfter: 0,
+      swingDelta: 0,
+      impact: m.label === "WICKET"
+        ? "Major breakthrough for the bowling attack."
+        : m.label === "SIX"
+        ? "Massive maximum that shifted momentum."
+        : "Boundary hit that relieved pressure.",
+    })),
+    whatToWatchNext: base.whatToWatchNext ? {
+      ...base.whatToWatchNext,
+      equation: "Chase ongoing · Decisive live phase",
+    } : undefined,
+    fantasyImpact: base.fantasyImpact ? {
+      ...base.fantasyImpact,
+      phasePoints: 0,
+      captain: { ...base.fantasyImpact.captain, runs: 0, wickets: 0, sixes: 0, fours: 0, pointsEarned: 0, summary: "Active in the chase" },
+      viceCaptain: { ...base.fantasyImpact.viceCaptain, runs: 0, wickets: 0, sixes: 0, fours: 0, pointsEarned: 0, summary: "Active in the chase" },
     } : undefined,
   };
 }
@@ -134,14 +161,19 @@ export async function POST(req: NextRequest) {
       return errorResponse("INVALID_INPUT", "spoilerLevel must be 'story-only', 'story-and-score', or 'full'.", 400);
     }
 
-    const VALID_LANGUAGES = new Set(["en", "hinglish"]);
-    if (language && !VALID_LANGUAGES.has(language)) {
-      return errorResponse("INVALID_INPUT", "language must be 'en' or 'hinglish'.", 400);
+    if (language && language !== "en") {
+      // Gracefully ignore legacy language flags and default to English
     }
 
-    // 5. Over bounds & cricket format checks (Bug 9)
+    // 5. Over bounds & cricket format checks (Bug 9 & 10)
     if (typeof fromOver !== "number" || typeof toOver !== "number" || isNaN(fromOver) || isNaN(toOver)) {
       return errorResponse("INVALID_INPUT", "fromOver and toOver must be valid numbers.", 400);
+    }
+
+    // Strict decimal validation: at most 1 decimal place (e.g. 14.2, not 14.25 or 14.02)
+    const roundedToTenth = Math.round(toOver * 10) / 10;
+    if (Math.abs(toOver - roundedToTenth) > 1e-6) {
+      return errorResponse("INVALID_OVER", `toOver (${toOver}) must have at most 1 decimal place.`, 400);
     }
 
     // fromOver must be an integer completed over (e.g. 0 to 19)
@@ -174,14 +206,40 @@ export async function POST(req: NextRequest) {
       return errorResponse("INVALID_RANGE", "Start over must be strictly less than end over.", 400);
     }
 
+    // Fantasy Selection Validation (Bug 11)
+    let capName = "Hardik Pandya";
+    let vcName = "Rohit Sharma";
+    if (fantasySelection !== undefined) {
+      if (typeof fantasySelection !== "object" || fantasySelection === null || Array.isArray(fantasySelection)) {
+        return errorResponse("INVALID_INPUT", "fantasySelection must be a valid object.", 400);
+      }
+      if (fantasySelection.captain) {
+        if (typeof fantasySelection.captain !== "string" || fantasySelection.captain.trim().length === 0 || fantasySelection.captain.trim().length > 40) {
+          return errorResponse("INVALID_INPUT", "fantasySelection.captain must be a string up to 40 characters.", 400);
+        }
+        capName = fantasySelection.captain.trim();
+      }
+      if (fantasySelection.viceCaptain) {
+        if (typeof fantasySelection.viceCaptain !== "string" || fantasySelection.viceCaptain.trim().length === 0 || fantasySelection.viceCaptain.trim().length > 40) {
+          return errorResponse("INVALID_INPUT", "fantasySelection.viceCaptain must be a string up to 40 characters.", 400);
+        }
+        vcName = fantasySelection.viceCaptain.trim();
+      }
+    }
+
     const toDisplay = toFraction > 0 ? Number(toOver.toFixed(1)) : toCompleted;
+    const fromDisplay = fromOver === 0 ? "1" : `${fromOver}.1`;
     const normalizedSpoilerLevel = spoilerLevel as SpoilerLevel;
 
-    // 6. Cache key: Normalized per match & window, omitting spoilerLevel/language (Optimization B)
+    // 6. Cache key: Normalized per match & window, omitting spoilerLevel/language (Optimization B & Bug 5)
     const cacheKey = `${meta.matchId}:${fromOver}:${toDisplay}`;
     const cachedEntry = getFromCache(cacheKey);
     if (cachedEntry) {
-      const redacted = redactPayloadForSpoiler(cachedEntry.payload, normalizedSpoilerLevel);
+      const redacted = redactPayloadForSpoiler(cachedEntry.payload, normalizedSpoilerLevel, fromDisplay, toDisplay, meta.team2);
+      // Personalize fantasy performance dynamically on the fly
+      const windowBalls = sliceBalls(balls, fromOver, toOver);
+      redacted.fantasyImpact = calculateFantasyPerformance(windowBalls, capName, vcName);
+
       const res: ApiResponse<RecapPayload> = {
         success: true,
         data: redacted,
@@ -189,12 +247,12 @@ export async function POST(req: NextRequest) {
           matchId: meta.matchId,
           usedFallback: cachedEntry.usedFallback,
           cached: true,
-          oversCovered: `Overs ${fromOver + 1} – ${toDisplay}`,
+          oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
         }
       };
       return NextResponse.json(res, {
         headers: {
-          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+          "Cache-Control": "private, no-store",
         },
       });
     }
@@ -356,42 +414,6 @@ export async function POST(req: NextRequest) {
           };
         }
 
-        // Server-side Redaction for "story-only" spoiler level
-        if (normalizedSpoilerLevel === "story-only") {
-          recapPayload.oneLiner = `You missed the chaos! Crucial wickets shook the top order early, but the middle order counter-punched fearlessly!`;
-          recapPayload.story = `Between overs ${fromDisplay} and ${toDisplay}, ${meta.team2} navigated a high-stakes phase. ${battersSummary} absorbed pressure against the bowling attack and counter-attacked with key boundaries to keep required-rate pressure in check. As the match reaches over ${toDisplay}, the partnership has stabilized the chase heading into live action.`;
-          
-          if (recapPayload.whatToWatchNext) {
-            recapPayload.whatToWatchNext.equation = `Chasing in the active phase with middle-order strikers at the crease.`;
-          }
-        }
-
-        // Dynamic Hinglish commentary (Bug 18: dynamic team names, no hardcoded NZ/India)
-        let hinglishHeadline: string;
-        let hinglishNarrative: string;
-
-        if (normalizedSpoilerLevel === "story-only") {
-          hinglishHeadline = `Bhai bawal match chal raha hai! ${meta.team1} ne wickets gira ke pressure banaya, par ${meta.team2} ne counter-attack karke momentum badal diya!`;
-          hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke dauran ${meta.team1} ke bowling attack ne bawal bowling ki, par ${battersSummary} ne counter-attack karke match ko barabari par laa khada kiya. Ab live phase mein sab kuch thrilling mod par hai!`;
-        } else {
-          if (stats.wickets >= 2) {
-            hinglishHeadline = `Bhai bawal match miss kar diya! ${meta.team1} ne jhatke diye par ${meta.team2} ne ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} tak counter-punch kar diya!`;
-          } else if (stats.runs >= 30) {
-            hinglishHeadline = `Bhai kya dhulai chal rahi hai! ${meta.team2} ne ${stats.totalBalls} balls mein ${stats.runs} runs thok ke match apne pakad mein kar liya!`;
-          } else {
-            hinglishHeadline = `Tense run-chase chal raha hai bhai! ${meta.team2} ne boundary aur sharp running se score ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd} pahuncha diya.`;
-          }
-
-          if (runsNeededAtPhaseEnd <= 0) {
-            hinglishNarrative = `${meta.team2} ne match ko zabardast andaaz mein finish kar diya!`;
-          } else {
-            hinglishNarrative = `Overs ${fromDisplay} se ${toDisplay} ke beech ${meta.team2} ne ${stats.runs} runs banaye ${stats.wickets > 0 ? `${stats.wickets} wicket kho kar` : `bina wicket khoye`}. ${battersSummary} ne ${stats.boundaries} chauke aur ${stats.sixes} chakke jad kar pressure release kiya. Ab over ${toDisplay} par score hai ${scoreAtPhaseEnd}/${wicketsAtPhaseEnd}, aur jeet ke liye chahiye ${runsNeededAtPhaseEnd} runs ${ballsRemainingAtPhaseEnd} balls mein!`;
-          }
-        }
-
-        recapPayload.hinglishOneLiner = hinglishHeadline;
-        recapPayload.hinglishStory = hinglishNarrative;
-
         const result = { payload: recapPayload, usedFallback: isFallbackUsed };
         setBoundedCache(cacheKey, result);
         return result;
@@ -402,7 +424,10 @@ export async function POST(req: NextRequest) {
 
     try {
       const { payload, usedFallback } = await executionPromise;
-      const deliveredPayload = redactPayloadForSpoiler(payload, normalizedSpoilerLevel);
+      const deliveredPayload = redactPayloadForSpoiler(payload, normalizedSpoilerLevel, fromDisplay, toDisplay, meta.team2);
+      const windowBalls = sliceBalls(balls, fromOver, toOver);
+      deliveredPayload.fantasyImpact = calculateFantasyPerformance(windowBalls, capName, vcName);
+
       const res: ApiResponse<RecapPayload> = {
         success: true,
         data: deliveredPayload,
@@ -410,12 +435,12 @@ export async function POST(req: NextRequest) {
           matchId: meta.matchId,
           usedFallback, // Correct boolean status (Bug 10)
           cached: false,
-          oversCovered: `Overs ${fromOver + 1} – ${toDisplay}`,
+          oversCovered: `Overs ${fromDisplay} – ${toDisplay}`,
         }
       };
       return NextResponse.json(res, {
         headers: {
-          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600", // Edge cache optimization (Bug 13)
+          "Cache-Control": "private, no-store",
         },
       });
     } finally {

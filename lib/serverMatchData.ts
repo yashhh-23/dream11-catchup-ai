@@ -233,24 +233,24 @@ const rawIndAusBalls: RawBall[] = [
   { over: 2, ball: 5, batter: "Shubman Gill", bowler: "Josh Hazlewood", runs: 1, wicket: false, commentary: "Nudged to third man for one.", winProbability: 0.66 },
   { over: 2, ball: 6, batter: "Rohit Sharma", bowler: "Josh Hazlewood", runs: 6, isSix: true, wicket: false, commentary: "SIX! Stepped out and launched Hazlewood over long-off! Huge hit!", winProbability: 0.72 },
 
-  // Middle Overs - Zampa strikes
-  { over: 9, ball: 1, batter: "Rohit Sharma", bowler: "Adam Zampa", runs: 1, wicket: false, commentary: "Zampa tosses it up, pushed down to long-off for one.", winProbability: 0.68 },
-  { over: 9, ball: 2, batter: "Suryakumar Yadav", bowler: "Adam Zampa", runs: 0, wicket: true, wicketType: "bowled", dismissedPlayer: "Suryakumar Yadav", commentary: "OUT! Bowled him! Zampa's slider skids under Surya's sweep! Massive blow for India!", winProbability: 0.54 },
-  { over: 9, ball: 3, batter: "Tilak Varma", bowler: "Adam Zampa", runs: 0, wicket: false, commentary: "Tilak defends cautiously into the off side.", winProbability: 0.52 },
-  { over: 9, ball: 4, batter: "Tilak Varma", bowler: "Adam Zampa", runs: 1, wicket: false, commentary: "Single to point to get off the mark.", winProbability: 0.52 },
-  { over: 9, ball: 5, batter: "Rohit Sharma", bowler: "Adam Zampa", runs: 0, wicket: true, wicketType: "caught", dismissedPlayer: "Rohit Sharma", commentary: "OUT! Caught at deep mid-wicket! Rohit goes for the slog sweep and holes out to Maxwell! Zampa gets 2 in 4 balls!", winProbability: 0.38 },
-  { over: 9, ball: 6, batter: "Hardik Pandya", bowler: "Adam Zampa", runs: 1, wicket: false, commentary: "Pushed to cover. India 88/3 after 10 overs.", winProbability: 0.39 },
+  // Over 4 (Over index 3) - Starc gets Gill
+  { over: 3, ball: 1, batter: "Rohit Sharma", bowler: "Mitchell Starc", runs: 1, wicket: false, commentary: "Starc returns, tucked away to square leg for a single.", winProbability: 0.72 },
+  { over: 3, ball: 2, batter: "Shubman Gill", bowler: "Mitchell Starc", runs: 4, isBoundaryFour: true, wicket: false, commentary: "FOUR! Exquisite straight drive back past mid-off.", winProbability: 0.75 },
+  { over: 3, ball: 3, batter: "Shubman Gill", bowler: "Mitchell Starc", runs: 0, wicket: true, wicketType: "caught", dismissedPlayer: "Shubman Gill", commentary: "OUT! Edged and taken! 148 kph snorter from Starc catches the outside edge, Carey takes a clean catch!", winProbability: 0.65 },
+  { over: 3, ball: 4, batter: "Suryakumar Yadav", bowler: "Mitchell Starc", runs: 0, wicket: false, commentary: "Defended off the back foot into the covers.", winProbability: 0.64 },
+  { over: 3, ball: 5, batter: "Suryakumar Yadav", bowler: "Mitchell Starc", runs: 1, wicket: false, commentary: "Off the mark with a quick push down to third man.", winProbability: 0.64 },
+  { over: 3, ball: 6, batter: "Rohit Sharma", bowler: "Mitchell Starc", runs: 0, wicket: false, commentary: "Dot ball. End of over 4: India 40/1.", winProbability: 0.63 },
 
-  // Counter punch overs 11-15 (Target 192)
-  { over: 14, ball: 1, batter: "Hardik Pandya", bowler: "Mitchell Starc", runs: 6, isSix: true, wicket: false, commentary: "SIX! Hardik clears his front leg and sends Starc 94 meters over mid-wicket!", winProbability: 0.68 },
-  { over: 14, ball: 2, batter: "Hardik Pandya", bowler: "Mitchell Starc", runs: 4, isBoundaryFour: true, wicket: false, commentary: "FOUR! Slashed through extra cover! India 144/3 chasing 192 (Need 48 off 28b).", winProbability: 0.74 },
-  { over: 14, ball: 3, batter: "Hardik Pandya", bowler: "Mitchell Starc", runs: 1, wicket: false, commentary: "Single to deep point.", winProbability: 0.74 },
-  { over: 14, ball: 4, batter: "Tilak Varma", bowler: "Mitchell Starc", runs: 2, wicket: false, commentary: "Punched into the deep for a brace.", winProbability: 0.75 },
-  { over: 14, ball: 5, batter: "Tilak Varma", bowler: "Mitchell Starc", runs: 4, isBoundaryFour: true, wicket: false, commentary: "FOUR! Upper-cut over the keeper!", winProbability: 0.80 },
-  { over: 14, ball: 6, batter: "Tilak Varma", bowler: "Mitchell Starc", runs: 1, wicket: false, commentary: "Single to retain strike.", winProbability: 0.80 },
+  // Over 5 (Over index 4) - Cummins strikes again
+  { over: 4, ball: 1, batter: "Suryakumar Yadav", bowler: "Pat Cummins", runs: 2, wicket: false, commentary: "Steered behind point for a brace.", winProbability: 0.64 },
+  { over: 4, ball: 2, batter: "Suryakumar Yadav", bowler: "Pat Cummins", runs: 0, wicket: true, wicketType: "bowled", dismissedPlayer: "Suryakumar Yadav", commentary: "OUT! Knocked him over! Cummins angles one in and clatters the off stump! Surya departs!", winProbability: 0.52 },
+  { over: 4, ball: 3, batter: "Tilak Varma", bowler: "Pat Cummins", runs: 0, wicket: false, commentary: "Tilak defends solidly down the pitch.", winProbability: 0.50 },
+  { over: 4, ball: 4, batter: "Tilak Varma", bowler: "Pat Cummins", runs: 1, wicket: false, commentary: "Pushed to mid-off for a brisk single.", winProbability: 0.50 },
+  { over: 4, ball: 5, batter: "Rohit Sharma", bowler: "Pat Cummins", runs: 4, isBoundaryFour: true, wicket: false, commentary: "FOUR! Rohit frees his arms and lofts Cummins over extra cover!", winProbability: 0.55 },
+  { over: 4, ball: 6, batter: "Rohit Sharma", bowler: "Pat Cummins", runs: 1, wicket: false, commentary: "Single to keep strike. 48/2 after 5 overs.", winProbability: 0.55 },
 
-  // Over 15 (Over 15.1 Live point)
-  { over: 15, ball: 1, batter: "Tilak Varma", bowler: "Pat Cummins", runs: 1, wicket: false, commentary: "Guided down to third man for a quick single. (CURRENT LIVE BALL)", winProbability: 0.81 },
+  // Over 6 (Over index 5) - Zampa starts
+  { over: 5, ball: 1, batter: "Rohit Sharma", bowler: "Adam Zampa", runs: 1, wicket: false, commentary: "Flatter on middle, nudged down to long-on for a single.", winProbability: 0.55 },
 ];
 
 export const serverIndAusBalls: Ball[] = buildCumulativeBalls(rawIndAusBalls);
@@ -271,7 +271,7 @@ export const serverMatchesRegistry: Record<string, { meta: MatchMeta; balls: Bal
       totalOvers: 20,
       target: 192,
       liveBallIndex: 30,
-      currentLiveOver: 15.1,
+      currentLiveOver: 5.1,
       innings: 2,
     },
     balls: serverIndAusBalls,
@@ -279,18 +279,29 @@ export const serverMatchesRegistry: Record<string, { meta: MatchMeta; balls: Bal
 };
 
 export function getServerMatchById(matchId?: string, publicOnly = false): { meta: MatchMeta; balls: Ball[] } | null {
-  // If specific matchId is passed and unknown, return null for 404 (fixes Bug 8)
-  if (matchId && !serverMatchesRegistry[matchId]) {
-    return null;
+  const targetId = matchId?.trim();
+  if (targetId) {
+    // Prototype pollution & invalid property protection (Bug 7)
+    if (!Object.prototype.hasOwnProperty.call(serverMatchesRegistry, targetId)) {
+      return null;
+    }
+    const match = serverMatchesRegistry[targetId];
+    if (publicOnly) {
+      return {
+        meta: match.meta,
+        balls: match.balls.slice(0, (match.meta.liveBallIndex ?? 85) + 1),
+      };
+    }
+    return match;
   }
-  const match = (matchId && serverMatchesRegistry[matchId]) || serverMatchesRegistry[serverMatchMeta.matchId];
+  const defaultMatch = serverMatchesRegistry[serverMatchMeta.matchId];
   if (publicOnly) {
     return {
-      meta: match.meta,
-      balls: match.balls.slice(0, (match.meta.liveBallIndex ?? 85) + 1),
+      meta: defaultMatch.meta,
+      balls: defaultMatch.balls.slice(0, (defaultMatch.meta.liveBallIndex ?? 85) + 1),
     };
   }
-  return match;
+  return defaultMatch;
 }
 
 /**
@@ -370,6 +381,16 @@ export function getNextSimulatedBall(
       isMatchFinished: false,
       error: "MATCH_NOT_FOUND: Match does not exist.",
       status: 404,
+    };
+  }
+
+  // Cross-match token forgery protection (Bug 6)
+  if (verification.session.matchId !== match.meta.matchId) {
+    return {
+      ball: null,
+      isMatchFinished: false,
+      error: `TOKEN_MATCH_MISMATCH: Session token was minted for match "${verification.session.matchId}", not "${match.meta.matchId}".`,
+      status: 403,
     };
   }
 

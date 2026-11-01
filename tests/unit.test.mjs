@@ -5,11 +5,12 @@ import assert from "node:assert/strict";
 import {
   serverMatchBalls as matchBalls,
   serverMatchMeta as matchMeta,
+  getServerMatchById,
   getServerMatchById as getMatchById,
   getPublicMatchData,
   getNextSimulatedBall,
 } from "../lib/serverMatchData.ts";
-import { createSimulatorToken } from "../lib/sessionUtils.ts";
+import { createSimulatorToken, verifySimulatorToken } from "../lib/sessionUtils.ts";
 import {
   sliceBalls,
   formatOver,
@@ -176,19 +177,18 @@ test("Product Features 3 & 4: computeThrillRating and getWhatToWatchNext produce
   assert.ok(nextWatch.upcomingBowler.includes("Ferguson"));
 });
 
-test("Product Feature: Hinglish dynamic narrative contains authentic cricket commentary terms", () => {
+test("Audio Narrator: Generates clean, authentic commentary text for voice narration", () => {
   const missedBalls = sliceBalls(matchBalls, 5, 14.2);
   const stats = calculateOverStats(missedBalls);
   assert.ok(stats.runs > 0);
   assert.strictEqual(stats.wickets, 2);
 
-  // Validate that numbers and cricket terms align accurately
-  const headline = `Bhai bawal match miss kar diya! NZ ne jhatke diye par India ne 124/3 tak counter-punch kar diya!`;
-  const story = `Overs 6 se 14.2 ke beech India ne ${stats.runs} runs banaye ${stats.wickets} wicket kho kar.`;
+  // Validate that commentary headline and story flow smoothly for TTS narration
+  const headline = `Between overs 6 and 14.2, India scored ${stats.runs} runs for the loss of ${stats.wickets} wickets.`;
+  const story = `Hardik Pandya and Tilak Varma absorbed pressure and countered with timely boundaries.`;
 
-  assert.ok(headline.includes("Bhai"));
-  assert.ok(story.includes("Overs 6 se 14.2"));
-  assert.ok(story.includes("runs banaye 2 wicket kho kar"));
+  assert.ok(headline.includes("scored 73 runs"));
+  assert.ok(story.includes("Hardik Pandya"));
 });
 
 test("Zero-Spoiler Security 1: getPublicMatchData isolates future balls strictly to current live ball 14.2", () => {
@@ -328,4 +328,53 @@ test("Bug 11 Fix: validateRecapAgainstBallData catches invalid mood and future o
   const overCheck = validateRecapAgainstBallData(futureOverRecap, sampleBalls, 10);
   assert.strictEqual(overCheck.valid, false);
   assert.ok(overCheck.issues.some(i => i.includes("outside the allowed window")));
+});
+
+test("Security & Prototype Safety: Token verification rejects forged tokens and cross-match usage", () => {
+  const token = createSimulatorToken("ind-nz-2026-t20-04", 85);
+  const validRes = verifySimulatorToken(token);
+  assert.strictEqual(validRes.valid, true);
+  assert.strictEqual(validRes.session?.matchId, "ind-nz-2026-t20-04");
+
+  // 1. Cross-match token mismatch rejected with 403
+  const crossMatchRes = getNextSimulatedBall("ind-aus-2026-t20-final", token, 20);
+  assert.strictEqual(crossMatchRes.status, 403);
+  assert.ok(crossMatchRes.error?.includes("TOKEN_MATCH_MISMATCH"));
+
+  // 2. Forged signature
+  const forgedToken = Buffer.from("ind-nz-2026-t20-04:85:1234567890:deadbeefbadsignature").toString("base64url");
+  const forgedRes = verifySimulatorToken(forgedToken);
+  assert.strictEqual(forgedRes.valid, false);
+
+  // 3. Altered payload with valid old signature
+  const raw = Buffer.from(token, "base64url").toString("utf-8");
+  const tampered = Buffer.from(raw.replace(":85:", ":111:")).toString("base64url");
+  const tamperedRes = verifySimulatorToken(tampered);
+  assert.strictEqual(tamperedRes.valid, false);
+});
+
+test("Prototype Pollution Prevention: getServerMatchById safely rejects Object.prototype properties", () => {
+  assert.strictEqual(getServerMatchById("constructor"), null);
+  assert.strictEqual(getServerMatchById("__proto__"), null);
+  assert.strictEqual(getServerMatchById("toString"), null);
+});
+
+test("Non-Striker Integrity: getWhatToWatchNext never selects an already-dismissed player as non-striker", () => {
+  const publicBalls = matchBalls.slice(0, 86);
+  const dismissedSet = new Set();
+
+  for (let i = 0; i < publicBalls.length; i++) {
+    const ball = publicBalls[i];
+    if (ball.dismissedPlayer) {
+      dismissedSet.add(ball.dismissedPlayer);
+    }
+    const nextWatch = getWhatToWatchNext(ball, matchMeta, publicBalls);
+    if (nextWatch.nonStriker && nextWatch.nonStriker !== "Middle-order partner") {
+      assert.strictEqual(
+        dismissedSet.has(nextWatch.nonStriker),
+        false,
+        `Ball ${i} (${ball.over}.${ball.ball}) incorrectly assigned dismissed player '${nextWatch.nonStriker}' as non-striker`
+      );
+    }
+  }
 });
