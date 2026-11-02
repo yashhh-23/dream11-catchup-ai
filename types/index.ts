@@ -8,10 +8,15 @@ export type WicketType =
 
 export interface Ball {
   over: number;           // 0-indexed completed overs (0 = over 1, 14 = over 15)
-  ball: number;           // 1-6 (delivery in over)
+  ball: number;           // delivery in over (1..N including extras)
+  legalBall?: number;     // 1-6 (legal delivery count in over, not incremented on wide/no-ball)
+  isExtra?: boolean;      // true if wide or no-ball
+  extraType?: "wides" | "noballs" | "legbyes" | "byes";
   batter: string;
   bowler: string;
-  runs: number;           // runs scored off the bat on this delivery
+  nonStriker?: string;
+  runs: number;           // total runs scored on this delivery (batter + extras)
+  batterRuns?: number;    // runs scored by batter off bat
   isBoundaryFour?: boolean; // explicit boundary flag
   isSix?: boolean;          // explicit six flag
   wicket: boolean;
@@ -32,16 +37,20 @@ export interface MatchMeta {
   format: "T20" | "ODI";
   totalOvers: number;
   target: number;         // Chasing target
+  firstInningsScore?: string; // e.g. "177/7" or "159/8"
   liveBallIndex: number;  // Exact index of current live ball in matchBalls (e.g. 85 for 14.2)
   currentLiveOver: number;// Display helper (e.g. 14.2)
   innings: 1 | 2;
   isMatchFinished?: boolean;
+  squad?: string[];
+  availableMatches?: Array<{ matchId: string; title: string }>;
 }
 
 export type BallEventKind = "wicket" | "six" | "four" | "dot" | "run";
 
 export interface TurningPointMoment {
   over: string;           // e.g. "9.3" or "14.2"
+  ballIndex?: number;     // Canonical delivery index for chronological ordering
   label: "WICKET" | "SIX" | "CRITICAL MOMENT" | "BOUNDARY";
   player: string;
   description: string;
@@ -56,8 +65,7 @@ export interface TurningPointMoment {
   };
 }
 
-export type SpoilerLevel = "story-only" | "story-and-score" | "full";
-export type LanguageMode = "en" | "hinglish";
+export type SpoilerLevel = "story-only" | "story-and-score";
 
 export interface FantasyPlayerImpact {
   name: string;
@@ -78,6 +86,7 @@ export interface FantasyTeamPerformance {
   rankBefore: string;
   rankAfter: string;
   rankDirection: "up" | "down" | "same";
+  isShielded?: boolean;
 }
 
 export interface ThrillRating {

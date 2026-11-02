@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPublicMatchData } from "@/lib/serverMatchData";
-import { ApiResponse, MatchMeta, Ball } from "@/types";
+import { sanitizeBallsForSpoiler, sanitizeMetaForSpoiler } from "@/lib/matchUtils";
+import { ApiResponse, MatchMeta, Ball, SpoilerLevel } from "@/types";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,8 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const matchId = searchParams.get("matchId") || undefined;
+    const rawSpoilerLevel = searchParams.get("spoilerLevel") || req.headers.get("x-spoiler-level");
+    const spoilerLevel: SpoilerLevel = rawSpoilerLevel === "story-only" ? "story-only" : "story-and-score";
 
     // Serves strictly public balls (overs 0 to 14.2) and a signed simulation session token
     const matchData = getPublicMatchData(matchId);
@@ -21,11 +24,16 @@ export async function GET(req: NextRequest) {
 
     const { meta, balls, sessionToken } = matchData;
 
+    // Zero-Spoiler Security: If client requested story-only protection, sanitize balls & meta at server level
+    // DevTools inspection / curl will never receive unredacted scores, wickets, or boundary markers
+    const sanitizedBalls = sanitizeBallsForSpoiler(balls, spoilerLevel);
+    const sanitizedMeta = sanitizeMetaForSpoiler(meta, spoilerLevel);
+
     const response: ApiResponse<{ meta: MatchMeta; balls: Ball[]; sessionToken: string }> = {
       success: true,
       data: {
-        meta,
-        balls,
+        meta: sanitizedMeta,
+        balls: sanitizedBalls,
         sessionToken,
       },
     };

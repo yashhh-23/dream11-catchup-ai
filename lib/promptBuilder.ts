@@ -32,25 +32,27 @@ export function buildRecapPrompt(
     const hasExcitement = overDeliveries.some(b => b.wicket || b.runs >= 4);
 
     if (!hasExcitement) {
-      // Quiet over: aggregate runs and dots using consistent 0-based over label
+      // Quiet over: aggregate runs and dots with consistent cricket notation
       const overRuns = overDeliveries.reduce((sum, b) => sum + b.runs, 0);
       const bowler = overDeliveries[0].bowler;
       const runsSequence = overDeliveries.map(b => b.runs).join(", ");
       const lastProb = Math.round(overDeliveries[overDeliveries.length - 1].winProbability * 100);
-      lines.push(`Over ${overNum} (${bowler}): ${overRuns} runs [${runsSequence}] | WinProb: ${lastProb}%`);
+      lines.push(`Over ${overNum + 1} (${overNum}.1–${overNum}.6, ${bowler}): ${overRuns} runs [${runsSequence}] | WinProb: ${lastProb}%`);
     } else {
-      // Eventful over: emit each key ball with matching Over notation
+      // Eventful over: emit each key ball with matching canonical ball notation
       for (let i = 0; i < overDeliveries.length; i++) {
         const b = overDeliveries[i];
         const kind = classifyBall(b);
+        const ballNum = b.legalBall || b.ball;
+        const ballPos = `${b.over}.${ballNum}`;
         if (kind === "wicket") {
-          lines.push(`Over ${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | WICKET (${b.wicketType || 'out'} - ${b.dismissedPlayer || b.batter}) | WP: ${Math.round(b.winProbability * 100)}%`);
+          lines.push(`Ball ${ballPos}: ${b.bowler} to ${b.batter} | WICKET (${b.wicketType || 'out'} - ${b.dismissedPlayer || b.batter}) | WP: ${Math.round(b.winProbability * 100)}%`);
         } else if (kind === "six") {
-          lines.push(`Over ${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | SIX! | WP: ${Math.round(b.winProbability * 100)}%`);
+          lines.push(`Ball ${ballPos}: ${b.bowler} to ${b.batter} | SIX! | WP: ${Math.round(b.winProbability * 100)}%`);
         } else if (kind === "four") {
-          lines.push(`Over ${b.over}.${b.ball}: ${b.bowler} to ${b.batter} | FOUR! | WP: ${Math.round(b.winProbability * 100)}%`);
+          lines.push(`Ball ${ballPos}: ${b.bowler} to ${b.batter} | FOUR! | WP: ${Math.round(b.winProbability * 100)}%`);
         } else {
-          lines.push(`Over ${b.over}.${b.ball}: ${b.runs}r`);
+          lines.push(`Ball ${ballPos}: ${b.runs}r`);
         }
       }
     }

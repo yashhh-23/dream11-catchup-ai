@@ -1,8 +1,8 @@
 import Groq from "groq-sdk";
 
 export const GROQ_MODELS = [
-  "llama-3.1-8b-instant",
   "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
 ] as const;
 
 // Module-level singleton instance to avoid cold-start instantiation per request
@@ -59,7 +59,7 @@ export async function callGroqRecap(
             },
           ],
           temperature: 0.5,
-          max_tokens: 380,
+          max_tokens: 1024,
           response_format: { type: "json_object" },
         },
         { signal: controller.signal }

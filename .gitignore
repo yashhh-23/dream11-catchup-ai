@@ -16,6 +16,7 @@
 # misc
 .DS_Store
 *.pem
+eval_report.txt
 
 # debug
 npm-debug.log*
@@ -25,14 +26,13 @@ yarn-error.log*
 # local env files
 .env*.local
 .env
+!.env.example
 
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
-.vercel
-.env*
+# archives
 code.zip

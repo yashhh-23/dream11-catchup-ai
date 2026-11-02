@@ -2,7 +2,24 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { MatchMeta, SpoilerLevel } from "@/types";
-import { Lock, ArrowRight, SlidersHorizontal, Clock, BellOff, Sparkles, ShieldCheck, X, CheckCircle2 } from "lucide-react";
+import { CRICKET_MINUTES_PER_OVER } from "@/lib/matchUtils";
+import { Lock, ArrowRight, SlidersHorizontal, Clock, BellOff, Sparkles, ShieldCheck, X, CheckCircle2, Trophy } from "lucide-react";
+
+function safeGetStorage(key: string): string | null {
+  try {
+    return typeof window !== "undefined" ? localStorage.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeSetStorage(key: string, value: string): void {
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(key, value);
+    }
+  } catch {}
+}
 
 interface SpoilerGateProps {
   meta: MatchMeta;
@@ -11,26 +28,36 @@ interface SpoilerGateProps {
     toOver: number,
     spoilerLevel?: SpoilerLevel,
     isWholeMatch?: boolean,
-    holdAlerts?: boolean
+    holdAlerts?: boolean,
+    fantasySelection?: { captain: string; viceCaptain: string }
   ) => void;
   onJumpToLiveDirect: () => void;
+  onSwitchMatch?: (matchId: string) => void;
 }
 
-const PRESETS = [
-  { id: 6, title: "Post-Powerplay", desc: "From over 6", isWhole: false },
-  { id: 10, title: "Middle overs", desc: "From over 10", isWhole: false },
-  { id: 1, title: "Full match", desc: "From over 1 (Start)", isWhole: true },
-] as const;
 
 export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   meta,
   onCatchUp,
   onJumpToLiveDirect,
+  onSwitchMatch,
 }) => {
   const liveTargetOver = meta.currentLiveOver;
 
-  // Start over (1-based display number)
-  const [selectedStartOver, setSelectedStartOver] = useState<number>(6);
+  const presets = useMemo(() => {
+    const list = [];
+    if (liveTargetOver > 6) {
+      list.push({ id: 6, title: "Post-Powerplay", desc: "From over 6", isWhole: false });
+    }
+    if (liveTargetOver > 10) {
+      list.push({ id: 10, title: "Middle overs", desc: "From over 10", isWhole: false });
+    }
+    list.push({ id: 1, title: "Full match", desc: "From over 1 (Start)", isWhole: true });
+    return list;
+  }, [liveTargetOver]);
+
+  // Start over (1-based display number, dynamically safe against early overs)
+  const [selectedStartOver, setSelectedStartOver] = useState<number>(() => (liveTargetOver > 6 ? 6 : 1));
   const [showCustomSlider, setShowCustomSlider] = useState<boolean>(false);
   const [inputMode, setInputMode] = useState<"time" | "overs">("overs");
   const [spoilerLevel, setSpoilerLevel] = useState<SpoilerLevel>("story-and-score");
@@ -38,11 +65,57 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   const [isWholeMatchSelected, setIsWholeMatchSelected] = useState<boolean>(false);
   const [showGuaranteeModal, setShowGuaranteeModal] = useState<boolean>(false);
 
+  const squadList = useMemo(() => {
+    return meta?.squad && meta.squad.length > 0 ? meta.squad : [];
+  }, [meta?.squad]);
+
+  const [captain, setCaptain] = useState<string>(() => {
+    return squadList[0] || "Key Batter";
+  });
+
+  const [viceCaptain, setViceCaptain] = useState<string>(() => {
+    return squadList[1] || squadList[0] || "Key All-Rounder";
+  });
+
+  // Dynamic squad sync when match or squad changes (match-agnostic defaults)
+  useEffect(() => {
+    if (squadList.length > 0) {
+      const savedCap = safeGetStorage("dream11_captain");
+      const savedVc = safeGetStorage("dream11_vice_captain");
+      const validCap = (savedCap && squadList.includes(savedCap)) ? savedCap : (squadList[0] || "Key Batter");
+      const validVc = (savedVc && squadList.includes(savedVc) && savedVc !== validCap)
+        ? savedVc
+        : (squadList.find(p => p !== validCap) || squadList[1] || validCap);
+      setCaptain(validCap);
+      setViceCaptain(validVc);
+    }
+  }, [squadList]);
+
+  const handleCaptainChange = (newCap: string) => {
+    setCaptain(newCap);
+    safeSetStorage("dream11_captain", newCap);
+    if (newCap === viceCaptain) {
+      const alternative = squadList.find(p => p !== newCap) || "";
+      setViceCaptain(alternative);
+      safeSetStorage("dream11_vice_captain", alternative);
+    }
+  };
+
+  const handleViceCaptainChange = (newVc: string) => {
+    setViceCaptain(newVc);
+    safeSetStorage("dream11_vice_captain", newVc);
+    if (newVc === captain) {
+      const alternative = squadList.find(p => p !== newVc) || "";
+      setCaptain(alternative);
+      safeSetStorage("dream11_captain", alternative);
+    }
+  };
+
   const timePresets = useMemo(() => {
     const live = meta.currentLiveOver;
     const calcOver = (minsAway: number) => {
-      const oversAway = Math.round(minsAway / 4.2);
-      return Math.max(1, Math.floor(live) - oversAway);
+      const oversAway = Math.round(minsAway / CRICKET_MINUTES_PER_OVER);
+      return Math.max(1, Math.floor(live) - oversAway + 1);
     };
     const p15 = calcOver(15);
     const p30 = calcOver(30);
@@ -56,20 +129,16 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
   }, [meta.currentLiveOver]);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("dream11_dnd_shield");
-      if (stored !== null) {
-        setDndShieldActive(stored === "true");
-      }
-    } catch {}
+    const stored = safeGetStorage("dream11_dnd_shield");
+    if (stored !== null) {
+      setDndShieldActive(stored === "true");
+    }
   }, []);
 
   const handleToggleDnd = () => {
     setDndShieldActive(prev => {
       const next = !prev;
-      try {
-        localStorage.setItem("dream11_dnd_shield", String(next));
-      } catch {}
+      safeSetStorage("dream11_dnd_shield", String(next));
       return next;
     });
   };
@@ -79,7 +148,10 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
   const handleStartCatchUp = () => {
     const fromIndex = Math.max(0, selectedStartOver - 1);
-    onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected, dndShieldActive);
+    onCatchUp(fromIndex, liveTargetOver, spoilerLevel, isWholeMatchSelected, dndShieldActive, {
+      captain,
+      viceCaptain,
+    });
   };
 
   const handleTimeSelect = (item: { id: string; label: string; startOver: number; desc: string; isWhole: boolean }) => {
@@ -109,6 +181,24 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
       <div className="bg-brand-surface border border-brand-border rounded-container p-5 sm:p-6 space-y-6">
         {/* Match Details & Two-Column Scorecard */}
         <div>
+          {meta.availableMatches && meta.availableMatches.length > 1 && (
+            <div className="flex items-center gap-2 mb-3 pb-3 border-b border-brand-border">
+              <span className="text-[11px] text-slate-400 font-medium shrink-0">Match:</span>
+              <select
+                aria-label="Switch cricket match"
+                value={meta.matchId}
+                onChange={(e) => onSwitchMatch?.(e.target.value)}
+                className="bg-brand-bg border border-brand-border text-xs text-white rounded px-2.5 py-1 focus:outline-none focus:border-brand-red cursor-pointer flex-1"
+              >
+                {meta.availableMatches.map((m) => (
+                  <option key={m.matchId} value={m.matchId}>
+                    {m.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="text-xs text-slate-400 mb-3 flex items-center justify-between">
             <span>{meta.title} · {meta.venue}</span>
             <span className="text-[11px] bg-brand-bg text-slate-300 px-2 py-0.5 rounded-chip border border-brand-border">
@@ -121,7 +211,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
               {
                 code: meta.team1 ? meta.team1.slice(0, 3).toUpperCase() : "TM1",
                 name: meta.team1,
-                score: meta.target ? `${meta.target - 1}/7` : "1st Innings",
+                score: meta.firstInningsScore || (meta.target ? `${meta.target - 1}` : "1st Innings"),
                 over: "(20.0)",
                 badgeBg: "bg-slate-800 border-slate-700 text-slate-300",
                 masked: false,
@@ -199,7 +289,7 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
 
           {inputMode === "overs" ? (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-              {PRESETS.map((p) => {
+              {presets.map((p) => {
                 const isSelected = p.isWhole ? isWholeMatchSelected : selectedStartOver === p.id && !isWholeMatchSelected;
                 return (
                   <button
@@ -309,11 +399,10 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
             <span className="text-[11px] text-slate-400 capitalize">{spoilerLevel.replace(/-/g, " ")}</span>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-xs">
+          <div className="grid grid-cols-2 gap-2 text-xs">
             {[
               { id: "story-only", title: "Story only", desc: "No scores at all" },
               { id: "story-and-score", title: "Story + Phase", desc: "Score at phase end" },
-              { id: "full", title: "Full Context", desc: "Full breakdown" },
             ].map(lvl => (
               <button
                 key={lvl.id}
@@ -332,6 +421,57 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
           </div>
         </div>
 
+        {/* Fantasy XI Captain & Vice-Captain Picker */}
+        <div className="space-y-2.5 pt-1 border-t border-brand-border">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
+            <span className="flex items-center gap-1.5">
+              <Trophy className="w-3.5 h-3.5 text-amber-400" />
+              <span>Your Dream11 Fantasy Picks</span>
+            </span>
+            <span className="text-[11px] text-slate-400">Phase multiplier active</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-slate-300 text-[11px]">Captain</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">2x Pts</span>
+              </div>
+              <select
+                aria-label="Select fantasy captain"
+                value={captain}
+                onChange={(e) => handleCaptainChange(e.target.value)}
+                className="w-full bg-brand-surface border border-brand-border text-white text-xs rounded-md p-1.5 focus:outline-none focus:border-brand-red transition-colors cursor-pointer"
+              >
+                {squadList.map((player) => (
+                  <option key={`c-${player}`} value={player}>
+                    {player}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-slate-300 text-[11px]">Vice-Captain</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">1.5x Pts</span>
+              </div>
+              <select
+                aria-label="Select fantasy vice-captain"
+                value={viceCaptain}
+                onChange={(e) => handleViceCaptainChange(e.target.value)}
+                className="w-full bg-brand-surface border border-brand-border text-white text-xs rounded-md p-1.5 focus:outline-none focus:border-brand-red transition-colors cursor-pointer"
+              >
+                {squadList.map((player) => (
+                  <option key={`vc-${player}`} value={player}>
+                    {player}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
         {/* Lock Screen DND Shield */}
         <div className="p-3 rounded-chip bg-brand-bg border border-brand-border flex items-center justify-between text-xs">
           <div className="flex items-center gap-2">
@@ -341,8 +481,8 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
               <BellOff className="w-4 h-4 text-slate-400" />
             )}
             <div>
-              <div className="font-medium text-slate-200">Hold back lock screen spoilers</div>
-              <div className="text-[10px] text-slate-400">Pause live push alerts until you catch up</div>
+              <div className="font-medium text-slate-200">In-App Spoiler Guard</div>
+              <div className="text-[10px] text-slate-400">Pauses in-app match alerts and score banners until you catch up</div>
             </div>
           </div>
           <button
@@ -443,20 +583,20 @@ export const SpoilerGate: React.FC<SpoilerGateProps> = ({
               <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1">
                 <div className="flex items-center gap-1.5 font-medium text-emerald-300">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>3. Server-Side Score Redaction</span>
+                  <span>3. Zero-Spoiler Payload Redaction</span>
                 </div>
                 <p className="text-slate-400 text-[11px] pl-5 leading-normal">
-                  In &ldquo;Story-Only&rdquo; mode, numbers and live outcomes are stripped on the server before AI generation and chart rendering.
+                  In &ldquo;Story-Only&rdquo; mode, match scores, win probabilities, and fantasy points are strictly redacted in the recap payload with zero numeric digits in the narrative.
                 </p>
               </div>
 
               <div className="p-2.5 rounded-chip bg-brand-bg border border-brand-border space-y-1">
                 <div className="flex items-center gap-1.5 font-medium text-emerald-300">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>4. DND Notification Shield</span>
+                  <span>4. In-App Notification Shield</span>
                 </div>
                 <p className="text-slate-400 text-[11px] pl-5 leading-normal">
-                  Mutes lock-screen notifications and push teasers until you finish reading and tap &ldquo;Jump to Live&rdquo;.
+                  Pauses in-app live score banners and match popups while reading your recap until you tap &ldquo;Jump to live&rdquo;.
                 </p>
               </div>
             </div>

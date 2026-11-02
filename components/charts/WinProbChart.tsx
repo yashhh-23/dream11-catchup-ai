@@ -2,14 +2,15 @@
 
 import React, { useState, useMemo } from "react";
 import { Ball, SpoilerLevel } from "@/types";
-import { isBallInRange, EVENT_STYLE, classifyBall } from "@/lib/matchUtils";
-import { X } from "lucide-react";
+import { findWindowIndices, EVENT_STYLE, classifyBall } from "@/lib/matchUtils";
+import { X, ShieldCheck } from "lucide-react";
 
 interface WinProbChartProps {
   balls: Ball[];
   missedFromOver: number;
   missedToOver: number;
   spoilerLevel?: SpoilerLevel;
+  teamName?: string;
 }
 
 interface ChartDot {
@@ -24,9 +25,22 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
   missedFromOver,
   missedToOver,
   spoilerLevel,
+  teamName,
 }) => {
   const [pinnedIdx, setPinnedIdx] = useState<number | null>(null);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  // Guard against empty balls array during asynchronous data loading (Race Condition Fix)
+  if (!balls || balls.length === 0) {
+    return (
+      <div className="w-full h-[180px] rounded-card bg-brand-surface border border-brand-border flex flex-col items-center justify-center p-4 text-center">
+        <div className="w-6 h-6 border-2 border-brand-red border-t-transparent rounded-full animate-spin mb-2" />
+        <p className="text-xs text-slate-400">Loading win probability momentum curve...</p>
+      </div>
+    );
+  }
+
+  const isStoryOnly = spoilerLevel === "story-only";
 
   const width = 600;
   const height = 180;
@@ -39,6 +53,9 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
   const chartH = height - padTop - padBottom;
   const totalBalls = balls.length;
 
+  const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
+  const getY = (prob: number) => padTop + chartH - prob * chartH;
+
   const {
     pathD,
     windowX1,
@@ -46,29 +63,27 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
     significantDots,
     xTicks,
   } = useMemo(() => {
-    const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
-    const getY = (prob: number) => padTop + chartH - prob * chartH;
-
-    const points = balls.map((b, i) => `${getX(i).toFixed(1)},${getY(b.winProbability).toFixed(1)}`);
+    // In story-only mode, calculate a smoothed narrative flow line that dampens individual delivery shocks
+    // to prevent visual cliff drops from spoiling wickets
+    const points = balls.map((b, i) => {
+      let prob = b.winProbability;
+      if (isStoryOnly) {
+        // 7-ball rolling smoothed momentum dampened toward equilibrium
+        const windowStart = Math.max(0, i - 3);
+        const windowEnd = Math.min(balls.length - 1, i + 3);
+        let sum = 0;
+        for (let k = windowStart; k <= windowEnd; k++) {
+          sum += balls[k].winProbability;
+        }
+        const avg = sum / (windowEnd - windowStart + 1);
+        prob = 0.5 + (avg - 0.5) * 0.35;
+      }
+      return `${getX(i).toFixed(1)},${getY(prob).toFixed(1)}`;
+    });
     const path = `M ${points.join(" L ")}`;
 
-    let startIdx = 0;
-    while (startIdx < balls.length && balls[startIdx].over < missedFromOver) {
-      startIdx++;
-    }
-
-    const toCompleted = Math.floor(missedToOver);
-    const toFraction = Math.round((missedToOver - toCompleted) * 10);
-    let endIdx = startIdx;
-    while (endIdx < balls.length) {
-      const b = balls[endIdx];
-      const inRange = toFraction > 0
-        ? (b.over < toCompleted || (b.over === toCompleted && b.ball <= toFraction))
-        : (b.over < toCompleted);
-      if (!inRange) break;
-      endIdx++;
-    }
-    const safeEndIdx = Math.max(startIdx, endIdx - 1);
+    const { startIdx, endIdx } = findWindowIndices(balls, missedFromOver, missedToOver);
+    const safeEndIdx = Math.max(startIdx, endIdx > startIdx ? endIdx - 1 : startIdx);
 
     const wX1 = getX(startIdx);
     const wX2 = getX(safeEndIdx);
@@ -77,17 +92,30 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
     // Only create dot objects for true key events (wickets, sixes, fours, window boundaries)
     // Avoids 13-field objects for every single delivery (Optimization E)
     const sigDots: ChartDot[] = [];
-    for (let idx = 0; idx < balls.length; idx++) {
-      const b = balls[idx];
-      const kind = classifyBall(b);
-      const isKey = kind === "wicket" || kind === "six" || kind === "four" || idx === startIdx || idx === safeEndIdx;
-      if (isKey) {
-        sigDots.push({
-          idx,
-          cx: getX(idx),
-          cy: getY(b.winProbability),
-          kind,
-        });
+    if (isStoryOnly) {
+      // In story-only mode, only mark window boundaries and major phase transitions
+      // NEVER create individual wicket (red) or boundary (green/blue) markers!
+      if (balls.length > 0) {
+        sigDots.push({ idx: startIdx, cx: getX(startIdx), cy: getY(0.5), kind: "dot" });
+        if (safeEndIdx > startIdx) {
+          const midIdx = Math.floor((startIdx + safeEndIdx) / 2);
+          sigDots.push({ idx: midIdx, cx: getX(midIdx), cy: getY(0.5), kind: "dot" });
+          sigDots.push({ idx: safeEndIdx, cx: getX(safeEndIdx), cy: getY(0.5), kind: "dot" });
+        }
+      }
+    } else {
+      for (let idx = 0; idx < balls.length; idx++) {
+        const b = balls[idx];
+        const kind = classifyBall(b);
+        const isKey = kind === "wicket" || kind === "six" || kind === "four" || idx === startIdx || idx === safeEndIdx;
+        if (isKey) {
+          sigDots.push({
+            idx,
+            cx: getX(idx),
+            cy: getY(b.winProbability),
+            kind,
+          });
+        }
       }
     }
 
@@ -110,22 +138,21 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
       significantDots: sigDots,
       xTicks: ticks,
     };
-  }, [balls, missedFromOver, missedToOver, totalBalls, chartW, chartH]);
+  }, [balls, missedFromOver, missedToOver, totalBalls]);
 
   const activeIdx = pinnedIdx ?? hoveredIdx;
   
   // Derive full details only on-demand for the single active ball (Optimization E)
+  // In story-only mode, scores and exact delivery numbers are strictly shielded
   const activePoint = useMemo(() => {
     if (activeIdx === null || !balls[activeIdx]) return null;
     const b = balls[activeIdx];
     const kind = classifyBall(b);
-    const getX = (idx: number) => padLeft + (idx / Math.max(1, totalBalls - 1)) * chartW;
-    const getY = (prob: number) => padTop + chartH - prob * chartH;
     return {
       idx: activeIdx,
-      overText: `Over ${b.over}.${b.ball}`,
-      prob: Math.round(b.winProbability * 100),
-      score: `${b.cumulativeScore}/${b.cumulativeWickets}`,
+      overText: isStoryOnly ? "Key Delivery" : `Over ${b.over}.${b.ball}`,
+      prob: isStoryOnly ? null : Math.round(b.winProbability * 100),
+      score: isStoryOnly ? "Shielded" : `${b.cumulativeScore}/${b.cumulativeWickets}`,
       commentary: b.commentary,
       isWicket: kind === "wicket",
       isSix: kind === "six",
@@ -136,7 +163,16 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
       cx: getX(activeIdx),
       cy: getY(b.winProbability),
     };
-  }, [activeIdx, balls, chartW, chartH, totalBalls]);
+  }, [activeIdx, balls, totalBalls, isStoryOnly]);
+
+  const displayedCommentary = useMemo(() => {
+    if (!activePoint) return "";
+    if (!isStoryOnly) return activePoint.commentary;
+    return activePoint.commentary
+      .replace(/\b\d+\/\d+\b/g, "[score shielded]")
+      .replace(/\b\d+\s*(?:runs?|rpo|rrr|balls?|overs?|target)\b/gi, "[shielded]")
+      .replace(/\d+/g, "");
+  }, [activePoint, isStoryOnly]);
 
   const handlePointClick = (idx: number) => {
     setPinnedIdx(prev => (prev === idx ? null : idx));
@@ -147,26 +183,39 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
       {/* Title & Legend */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-xs font-semibold text-slate-300">
-          Win probability · India
+          Win probability · {teamName || "Chasing Team"}
         </h3>
-        <div className="flex items-center gap-3 text-xs text-slate-400">
-          <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-sm bg-amber-400/20 border border-amber-400/50" />
-            <span>Missed phase</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-rose-500" />
-            <span>Wicket</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            <span>Six</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-blue-500" />
-            <span>Four</span>
-          </span>
-        </div>
+        {isStoryOnly ? (
+          <div className="flex items-center gap-2.5 text-xs text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-amber-400/20 border border-amber-400/50" />
+              <span>Missed phase</span>
+            </span>
+            <span className="flex items-center gap-1 text-indigo-400 font-medium">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Story Momentum (Events Shielded)</span>
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 text-xs text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-sm bg-amber-400/20 border border-amber-400/50" />
+              <span>Missed phase</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-rose-500" />
+              <span>Wicket</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Six</span>
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-blue-500" />
+              <span>Four</span>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* SVG Graph Canvas */}
@@ -218,7 +267,9 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
                   textAnchor="end"
                   className="font-mono tabular-nums"
                 >
-                  {`${Math.round(level * 100)}%`}
+                  {spoilerLevel === "story-only"
+                    ? (level === 0.75 ? "Bat" : level === 0.5 ? "Even" : "Bowl")
+                    : `${Math.round(level * 100)}%`}
                 </text>
               </g>
             );
@@ -268,7 +319,9 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
             const isSelected = activePoint?.idx === point.idx;
             const isPinnedThis = pinnedIdx === point.idx;
 
-            const fillColor = point.kind === "wicket"
+            const fillColor = isStoryOnly
+              ? "#818cf8"
+              : point.kind === "wicket"
               ? "#ef4444"
               : point.kind === "six"
               ? "#10b981"
@@ -284,7 +337,11 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
                 key={point.idx}
                 role="button"
                 tabIndex={0}
-                aria-label={`Over ${ballItem?.over}.${ballItem?.ball}: ${ballItem?.runs} runs, Win probability ${Math.round((ballItem?.winProbability ?? 0.5) * 100)}%`}
+                aria-label={
+                  isStoryOnly
+                    ? `Key momentum event (${point.kind})`
+                    : `Over ${ballItem?.over}.${ballItem?.ball}: ${ballItem?.runs} runs, Win probability ${Math.round((ballItem?.winProbability ?? 0.5) * 100)}%`
+                }
                 className="cursor-pointer focus:outline-none"
                 onClick={() => handlePointClick(point.idx)}
                 onKeyDown={(e) => {
@@ -337,22 +394,22 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
           <div className="flex items-center justify-between gap-2 mb-1">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-200 text-xs">
-                {activePoint.overText}
+                {spoilerLevel === "story-only" ? "Key Delivery" : activePoint.overText}
               </span>
               <span className="text-slate-400 text-xs">
                 {activePoint.bowler} to {activePoint.batter}
               </span>
-              {activePoint.isWicket && (
+              {!isStoryOnly && activePoint.isWicket && (
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30">
                   WICKET
                 </span>
               )}
-              {activePoint.isSix && (
+              {!isStoryOnly && activePoint.isSix && (
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                   SIX
                 </span>
               )}
-              {activePoint.isFour && (
+              {!isStoryOnly && activePoint.isFour && (
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
                   FOUR
                 </span>
@@ -360,13 +417,19 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="tabular-nums font-semibold text-xs text-emerald-400">
-                {activePoint.prob}% win
-              </span>
-              {spoilerLevel !== "story-only" && (
-                <span className="tabular-nums text-[11px] text-slate-400">
-                  ({activePoint.score})
+              {spoilerLevel === "story-only" ? (
+                <span className="font-semibold text-xs text-amber-400">
+                  Momentum Shift
                 </span>
+              ) : (
+                <>
+                  <span className="tabular-nums font-semibold text-xs text-emerald-400">
+                    {activePoint.prob}% win
+                  </span>
+                  <span className="tabular-nums text-[11px] text-slate-400">
+                    ({activePoint.score})
+                  </span>
+                </>
               )}
               {pinnedIdx !== null && (
                 <button
@@ -382,7 +445,7 @@ export const WinProbChart: React.FC<WinProbChartProps> = ({
           </div>
 
           <p className="text-xs text-slate-300 leading-relaxed font-sans">
-            {activePoint.commentary}
+            {displayedCommentary}
           </p>
 
           <div className="mt-1.5 text-[10px] text-slate-500 flex items-center justify-between">
