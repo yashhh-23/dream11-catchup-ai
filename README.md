@@ -223,19 +223,3 @@ The evaluation report is automatically generated at [`EVAL.md`](./EVAL.md).
   2. ICC Men's T20 World Cup Final 2022 — England vs Pakistan (Melbourne Cricket Ground, 13 November 2022).
 
 ---
-
-## 📝 200-Word Official Submission Note
-
-> **The Fan Problem:**  
-> Fans missing live overs face an awful trade-off: WhatsApp group spoilers, sterile raw scorecards that miss the drama, or bloated highlight reels that kill the live rhythm.
->
-> **The Solution — CatchUp AI:**  
-> A zero-spoiler match companion delivering a **45-second live rejoin loop**. Fans choose their missed window and protection tier: **Story-Only** (narrative flow with strict zero-digit shielding over the wire) or **Story + Score**. In seconds, fans receive:  
-> 1. Narrative context & key turning points (in English/Hinglish with Web Speech audio narration).  
-> 2. A win-momentum curve with shielded event markers.  
-> 3. Dynamic Dream11 Captain/VC fantasy point delta & simulated rank movement.  
-> 4. A predictive "What to Watch Next" tactical live bridge.
->
-> **Architecture & AI Stack:**  
-> - **Zero-Hallucination Design:** Match stats, fantasy points, and win probabilities are computed deterministically from raw ball data in code; the LLM handles only the emotive prose with a 100% offline rule-based fallback.  
-> - **AI Engine & Tools:** **Groq LPUs (Llama 3.3 70B / 3.1 8B)** for sub-second, token-compressed generation, **Web Speech API** for commentary audio, and **Anthropic Claude** for architecture co-piloting.
