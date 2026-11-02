@@ -81,20 +81,20 @@ flowchart TD
         Groq["Groq Cloud API\nllama-3.3-70b-versatile (max_tokens: 1024)\nFast delta summarization (~1.2s)"]
     end
 
-    UI_Gate -->|1. Request catch-up window & matchId| RouteRecap
+    UI_Gate -->|"1. Request catch-up window & matchId"| RouteRecap
     RouteRecap --> SessionCrypto
     RouteRecap --> ServerData
     RouteRecap --> PromptBuilder
-    PromptBuilder -->|Compressed context| Groq
-    Groq -->|JSON Recap Payload| RouteRecap
-    RouteRecap -.->|Timeout / Fallback| FallbackEngine
-    FallbackEngine -.->|Immediate heuristic recap| UI_Recap
-    UI_Gate -->|Fetch deliveries with spoilerLevel| RouteMatch
+    PromptBuilder -->|"Compressed context"| Groq
+    Groq -->|"JSON Recap Payload"| RouteRecap
+    RouteRecap -.->|"Timeout / Fallback"| FallbackEngine
+    FallbackEngine -.->|"Immediate heuristic recap"| UI_Recap
+    UI_Gate -->|"Fetch deliveries with spoilerLevel"| RouteMatch
     RouteMatch --> ServerData
-    UI_Recap -->|2. Jump to Live (Zero Spoilers)| UI_Live
-    UI_Live -->|3. Advance ball with signed token & spoilerLevel| RouteDelta
+    UI_Recap -->|"2. Jump to Live - Zero Spoilers"| UI_Live
+    UI_Live -->|"3. Advance ball with signed token & spoilerLevel"| RouteDelta
     RouteDelta --> SessionCrypto
-    SessionCrypto -->|Authorize next delivery| ServerData
+    SessionCrypto -->|"Authorize next delivery"| ServerData
 ```
 
 ---
